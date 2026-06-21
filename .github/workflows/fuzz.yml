@@ -1,0 +1,69 @@
+name: Fuzz
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: 'Duration per fuzz target (e.g. 5m, 30m, 1h)'
+        required: false
+        default: '30m'
+
+jobs:
+  fuzz:
+    name: Fuzz targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - FuzzPool_Register
+          - FuzzPool_AcquireRelease
+          - FuzzExecutor_Run
+          - FuzzThrottle_Concurrency
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      - name: Fuzz ${{ matrix.target }}
+        run: |
+          FUZZTIME="${{ github.event.inputs.fuzztime || '30m' }}"
+          go test -fuzz=${{ matrix.target }} -fuzztime=${FUZZTIME} ./internal/store/
+
+      - name: Upload corpus on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-${{ matrix.target }}-${{ github.run_number }}
+          path: internal/store/testdata/fuzz/
+          retention-days: 7
+
+  chaos:
+    name: Chaos & memory stability
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      - name: Goroutine leak detection
+        env:
+          DBSTORE_CHAOS_TEST: "1"
+          DBSTORE_CHAOS_DURATION: "5m"
+        run: go test -v -run=TestPool_Chaos_GoroutineLeaks -timeout=600s ./internal/store/
+
+      - name: Memory stability
+        env:
+          DBSTORE_CHAOS_TEST: "1"
+          DBSTORE_CHAOS_DURATION: "5m"
+        run: go test -v -run=TestPool_Chaos_MemoryStability -timeout=600s ./internal/store/
