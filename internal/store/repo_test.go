@@ -140,7 +140,7 @@ func TestUserRepo_CreateBatch_Rollback(t *testing.T) {
 	exec := NewExecutor(pool)
 	ctx := context.Background()
 
-	exec.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error {
+	_ = exec.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error {
 		_, err := db.ExecContext(ctx, `CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)`)
 		return err
 	})
@@ -148,7 +148,7 @@ func TestUserRepo_CreateBatch_Rollback(t *testing.T) {
 	// mid-transaction failure → full rollback
 	concrete := &sqliteUserRepo{NewBaseRepo("primary", exec)}
 	err := concrete.RunTx(ctx, func(ctx context.Context, tx *sqlx.Tx) error {
-		tx.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, "Alice")
+		_, _ = tx.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, "Alice")
 		return errors.New("intentional error")
 	})
 	assert.Error(t, err)

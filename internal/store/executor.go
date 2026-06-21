@@ -49,7 +49,7 @@ func (e *Executor) RunTx(ctx context.Context, name string, fn func(context.Conte
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback() // no-op after Commit; also covers panics
+	defer func() { _ = tx.Rollback() }() // no-op after Commit; also covers panics
 
 	if err := fn(ctx, tx); err != nil {
 		return err

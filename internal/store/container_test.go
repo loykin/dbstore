@@ -6,14 +6,17 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
 	tcmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // --- driver implementations ---
@@ -41,7 +44,7 @@ func (d *mysqlDriver) ApplyPoolConfig(db *sqlx.DB, cfg PoolConfig) {
 // --- shared suite ---
 
 // containerSuite runs the standard set of pool/executor/repo tests against
-// any real database. placeholder is "?" for MySQL/SQLite, "$" for PostgreSQL.
+// any real database. ph is "?" for MySQL/SQLite, "$" for PostgreSQL.
 func containerSuite(t *testing.T, exec *Executor, source, ph string) {
 	t.Helper()
 	ctx := context.Background()
@@ -53,7 +56,6 @@ func containerSuite(t *testing.T, exec *Executor, source, ph string) {
 		return "?"
 	}
 
-	// schema
 	require.NoError(t, exec.Run(ctx, source, func(ctx context.Context, db *sqlx.DB) error {
 		_, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS cs_users (
 			id   SERIAL PRIMARY KEY,
@@ -82,7 +84,7 @@ func containerSuite(t *testing.T, exec *Executor, source, ph string) {
 		}))
 
 		var count int
-		exec.Run(ctx, source, func(ctx context.Context, db *sqlx.DB) error {
+		_ = exec.Run(ctx, source, func(ctx context.Context, db *sqlx.DB) error {
 			return db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cs_users WHERE name = 'Bob'`).Scan(&count)
 		})
 		assert.Equal(t, 1, count)
@@ -90,18 +92,18 @@ func containerSuite(t *testing.T, exec *Executor, source, ph string) {
 
 	t.Run("Transaction_Rollback", func(t *testing.T) {
 		before := 0
-		exec.Run(ctx, source, func(ctx context.Context, db *sqlx.DB) error {
+		_ = exec.Run(ctx, source, func(ctx context.Context, db *sqlx.DB) error {
 			return db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cs_users`).Scan(&before)
 		})
 
 		err := exec.RunTx(ctx, source, func(ctx context.Context, tx *sqlx.Tx) error {
-			tx.ExecContext(ctx, `INSERT INTO cs_users (name) VALUES (`+p(1)+`)`, "ShouldRollback")
+			_, _ = tx.ExecContext(ctx, `INSERT INTO cs_users (name) VALUES (`+p(1)+`)`, "ShouldRollback")
 			return fmt.Errorf("intentional")
 		})
 		require.Error(t, err)
 
 		var after int
-		exec.Run(ctx, source, func(ctx context.Context, db *sqlx.DB) error {
+		_ = exec.Run(ctx, source, func(ctx context.Context, db *sqlx.DB) error {
 			return db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cs_users`).Scan(&after)
 		})
 		assert.Equal(t, before, after, "rollback must not change row count")
@@ -109,7 +111,7 @@ func containerSuite(t *testing.T, exec *Executor, source, ph string) {
 
 	t.Run("Concurrent_Inserts", func(t *testing.T) {
 		before := 0
-		exec.Run(ctx, source, func(ctx context.Context, db *sqlx.DB) error {
+		_ = exec.Run(ctx, source, func(ctx context.Context, db *sqlx.DB) error {
 			return db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cs_users`).Scan(&before)
 		})
 
@@ -130,7 +132,7 @@ func containerSuite(t *testing.T, exec *Executor, source, ph string) {
 		}
 
 		var after int
-		exec.Run(ctx, source, func(ctx context.Context, db *sqlx.DB) error {
+		_ = exec.Run(ctx, source, func(ctx context.Context, db *sqlx.DB) error {
 			return db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cs_users`).Scan(&after)
 		})
 		assert.Equal(t, before+workers, after)
@@ -146,9 +148,18 @@ func TestContainer_Postgres(t *testing.T) {
 		tcpostgres.WithDatabase("testdb"),
 		tcpostgres.WithUsername("user"),
 		tcpostgres.WithPassword("pass"),
+		testcontainers.WithWaitStrategy(
+			wait.ForAll(
+				wait.ForLog("database system is ready to accept connections").
+					WithOccurrence(2).
+					WithStartupTimeout(60*time.Second),
+				wait.ForListeningPort("5432/tcp").
+					WithStartupTimeout(60*time.Second),
+			),
+		),
 	)
 	require.NoError(t, err)
-	t.Cleanup(func() { ctr.Terminate(ctx) })
+	t.Cleanup(func() { _ = ctr.Terminate(ctx) })
 
 	dsn, err := ctr.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
@@ -178,9 +189,17 @@ func TestContainer_MySQL(t *testing.T) {
 		tcmysql.WithDatabase("testdb"),
 		tcmysql.WithUsername("user"),
 		tcmysql.WithPassword("pass"),
+		testcontainers.WithWaitStrategy(
+			wait.ForAll(
+				wait.ForLog("port: 3306  MySQL Community Server").
+					WithStartupTimeout(90*time.Second),
+				wait.ForListeningPort("3306/tcp").
+					WithStartupTimeout(90*time.Second),
+			),
+		),
 	)
 	require.NoError(t, err)
-	t.Cleanup(func() { ctr.Terminate(ctx) })
+	t.Cleanup(func() { _ = ctr.Terminate(ctx) })
 
 	dsn, err := ctr.ConnectionString(ctx)
 	require.NoError(t, err)
@@ -210,17 +229,34 @@ func TestContainer_MultiDB_PostgresAndMySQL(t *testing.T) {
 		tcpostgres.WithDatabase("testdb"),
 		tcpostgres.WithUsername("user"),
 		tcpostgres.WithPassword("pass"),
+		testcontainers.WithWaitStrategy(
+			wait.ForAll(
+				wait.ForLog("database system is ready to accept connections").
+					WithOccurrence(2).
+					WithStartupTimeout(60*time.Second),
+				wait.ForListeningPort("5432/tcp").
+					WithStartupTimeout(60*time.Second),
+			),
+		),
 	)
 	require.NoError(t, err)
-	t.Cleanup(func() { pgCtr.Terminate(ctx) })
+	t.Cleanup(func() { _ = pgCtr.Terminate(ctx) })
 
 	mysCtr, err := tcmysql.Run(ctx, "mysql:8.0",
 		tcmysql.WithDatabase("testdb"),
 		tcmysql.WithUsername("user"),
 		tcmysql.WithPassword("pass"),
+		testcontainers.WithWaitStrategy(
+			wait.ForAll(
+				wait.ForLog("port: 3306  MySQL Community Server").
+					WithStartupTimeout(90*time.Second),
+				wait.ForListeningPort("3306/tcp").
+					WithStartupTimeout(90*time.Second),
+			),
+		),
 	)
 	require.NoError(t, err)
-	t.Cleanup(func() { mysCtr.Terminate(ctx) })
+	t.Cleanup(func() { _ = mysCtr.Terminate(ctx) })
 
 	pgDSN, err := pgCtr.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
@@ -239,7 +275,6 @@ func TestContainer_MultiDB_PostgresAndMySQL(t *testing.T) {
 
 	exec := NewExecutor(pool)
 
-	// run the same suite against both at the same time
 	pgDone := make(chan struct{})
 	myDone := make(chan struct{})
 

@@ -72,7 +72,7 @@ func TestExecutor_Run_ThrottleBlocks(t *testing.T) {
 	ready := make(chan struct{})
 
 	go func() {
-		executor.Run(context.Background(), "primary", func(ctx context.Context, db *sqlx.DB) error {
+		_ = executor.Run(context.Background(), "primary", func(ctx context.Context, db *sqlx.DB) error {
 			running.Store(true)
 			close(ready)
 			time.Sleep(200 * time.Millisecond)
@@ -131,7 +131,7 @@ func TestExecutor_RunTx_Commit(t *testing.T) {
 	executor := NewExecutor(pool)
 	ctx := context.Background()
 
-	executor.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error {
+	_ = executor.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error {
 		_, err := db.ExecContext(ctx, `CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)`)
 		return err
 	})
@@ -142,7 +142,7 @@ func TestExecutor_RunTx_Commit(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	executor.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error {
+	_ = executor.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error {
 		var val string
 		err := db.QueryRowContext(ctx, `SELECT val FROM t WHERE id = 1`).Scan(&val)
 		require.NoError(t, err)
@@ -159,20 +159,20 @@ func TestExecutor_RunTx_Rollback(t *testing.T) {
 	executor := NewExecutor(pool)
 	ctx := context.Background()
 
-	executor.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error {
+	_ = executor.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error {
 		_, err := db.ExecContext(ctx, `CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)`)
 		return err
 	})
 
 	err := executor.RunTx(ctx, "primary", func(ctx context.Context, tx *sqlx.Tx) error {
-		tx.ExecContext(ctx, `INSERT INTO t (val) VALUES (?)`, "should-rollback")
+		_, _ = tx.ExecContext(ctx, `INSERT INTO t (val) VALUES (?)`, "should-rollback")
 		return errors.New("intentional error")
 	})
 	assert.Error(t, err)
 
-	executor.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error {
+	_ = executor.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error {
 		var count int
-		db.QueryRowContext(ctx, `SELECT COUNT(*) FROM t`).Scan(&count)
+		_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM t`).Scan(&count)
 		assert.Equal(t, 0, count)
 		return nil
 	})
