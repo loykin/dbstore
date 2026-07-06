@@ -18,13 +18,13 @@ func (d *sqliteDriver) ApplyPoolConfig(db *sqlx.DB, cfg PoolConfig) {
 	db.SetConnMaxLifetime(cfg.MaxLifetime)
 }
 
-func newTestRegistry() *DriverRegistry {
-	r := NewDriverRegistry()
+func newTestRegistry() *DriverRegistry[*sqlx.DB] {
+	r := NewDriverRegistry[*sqlx.DB]()
 	r.Register("sqlite", &sqliteDriver{})
 	return r
 }
 
-func newTestPool() *Pool {
+func newTestPool() *Pool[*sqlx.DB] {
 	return NewPool(newTestRegistry())
 }
 

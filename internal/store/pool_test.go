@@ -3,6 +3,7 @@ package store
 import (
 	"testing"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -43,7 +44,7 @@ func TestPool_Register_Duplicate(t *testing.T) {
 }
 
 func TestPool_Register_UnknownDriver(t *testing.T) {
-	pool := NewPool(NewDriverRegistry())
+	pool := NewPool(NewDriverRegistry[*sqlx.DB]())
 	defer pool.RemoveAll()
 
 	err := pool.Register("db", DriverConfig{Driver: "unknown", DSN: ":memory:"})

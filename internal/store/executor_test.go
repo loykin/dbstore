@@ -136,7 +136,7 @@ func TestExecutor_RunTx_Commit(t *testing.T) {
 		return err
 	})
 
-	err := executor.RunTx(ctx, "primary", func(ctx context.Context, tx *sqlx.Tx) error {
+	err := RunTx(executor, ctx, "primary", func(ctx context.Context, tx *sqlx.Tx) error {
 		_, err := tx.ExecContext(ctx, `INSERT INTO t (val) VALUES (?)`, "tx-value")
 		return err
 	})
@@ -164,7 +164,7 @@ func TestExecutor_RunTx_Rollback(t *testing.T) {
 		return err
 	})
 
-	err := executor.RunTx(ctx, "primary", func(ctx context.Context, tx *sqlx.Tx) error {
+	err := RunTx(executor, ctx, "primary", func(ctx context.Context, tx *sqlx.Tx) error {
 		_, _ = tx.ExecContext(ctx, `INSERT INTO t (val) VALUES (?)`, "should-rollback")
 		return errors.New("intentional error")
 	})

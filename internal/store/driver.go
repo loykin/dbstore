@@ -6,9 +6,18 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-type DriverBuilder interface {
-	Open(cfg DriverConfig) (*sqlx.DB, error)
-	ApplyPoolConfig(db *sqlx.DB, cfg PoolConfig)
+// DriverBuilder opens a new client of type T from cfg.
+type DriverBuilder[T any] interface {
+	Open(cfg DriverConfig) (T, error)
+}
+
+// PoolConfigApplier is an optional capability a DriverBuilder can implement
+// to tune pool settings right after Open. It is kept separate from
+// DriverBuilder (not a required method) because most PoolConfig fields
+// (MaxOpenConns, MaxIdleConns, ...) are specific to database/sql connection
+// pools and have no equivalent for non-SQL clients.
+type PoolConfigApplier[T any] interface {
+	ApplyPoolConfig(client T, cfg PoolConfig)
 }
 
 // DefaultApplyPoolConfig applies the standard pool configuration to db.
@@ -20,27 +29,34 @@ func DefaultApplyPoolConfig(db *sqlx.DB, cfg PoolConfig) {
 	db.SetConnMaxIdleTime(cfg.MaxIdleTime)
 }
 
-type DriverRegistry struct {
-	builders map[string]DriverBuilder
+type DriverRegistry[T any] struct {
+	builders map[string]DriverBuilder[T]
 }
 
-func NewDriverRegistry() *DriverRegistry {
-	return &DriverRegistry{builders: make(map[string]DriverBuilder)}
+func NewDriverRegistry[T any]() *DriverRegistry[T] {
+	return &DriverRegistry[T]{builders: make(map[string]DriverBuilder[T])}
 }
 
-func (r *DriverRegistry) Register(name string, b DriverBuilder) {
+func (r *DriverRegistry[T]) Register(name string, b DriverBuilder[T]) {
 	r.builders[name] = b
 }
 
-func (r *DriverRegistry) open(cfg DriverConfig) (*sqlx.DB, error) {
+func (r *DriverRegistry[T]) open(cfg DriverConfig) (T, error) {
+	var zero T
 	b, ok := r.builders[cfg.Driver]
 	if !ok {
-		return nil, fmt.Errorf("dspool: unknown driver %q", cfg.Driver)
+		return zero, fmt.Errorf("dspool: unknown driver %q", cfg.Driver)
 	}
-	db, err := b.Open(cfg)
+	client, err := b.Open(cfg)
 	if err != nil {
-		return nil, err
+		return zero, err
 	}
-	b.ApplyPoolConfig(db, cfg.PoolConfig)
-	return db, nil
+	// Asserted on the builder b, not the freshly-opened client: it's the
+	// builder (author of Open) that optionally knows how to tune the client
+	// it just produced, mirroring closeClient's assertion on the client
+	// itself for the opposite (teardown) capability in pool.go.
+	if applier, ok := any(b).(PoolConfigApplier[T]); ok {
+		applier.ApplyPoolConfig(client, cfg.PoolConfig)
+	}
+	return client, nil
 }

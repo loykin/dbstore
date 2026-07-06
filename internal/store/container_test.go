@@ -45,7 +45,7 @@ func (d *mysqlDriver) ApplyPoolConfig(db *sqlx.DB, cfg PoolConfig) {
 
 // containerSuite runs the standard set of pool/executor/repo tests against
 // any real database. ph is "?" for MySQL/SQLite, "$" for PostgreSQL.
-func containerSuite(t *testing.T, exec *Executor, source, ph string) {
+func containerSuite(t *testing.T, exec *Executor[*sqlx.DB], source, ph string) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -78,7 +78,7 @@ func containerSuite(t *testing.T, exec *Executor, source, ph string) {
 	})
 
 	t.Run("Transaction_Commit", func(t *testing.T) {
-		require.NoError(t, exec.RunTx(ctx, source, func(ctx context.Context, tx *sqlx.Tx) error {
+		require.NoError(t, RunTx(exec, ctx, source, func(ctx context.Context, tx *sqlx.Tx) error {
 			_, err := tx.ExecContext(ctx, `INSERT INTO cs_users (name) VALUES (`+p(1)+`)`, "Bob")
 			return err
 		}))
@@ -96,7 +96,7 @@ func containerSuite(t *testing.T, exec *Executor, source, ph string) {
 			return db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cs_users`).Scan(&before)
 		})
 
-		err := exec.RunTx(ctx, source, func(ctx context.Context, tx *sqlx.Tx) error {
+		err := RunTx(exec, ctx, source, func(ctx context.Context, tx *sqlx.Tx) error {
 			_, _ = tx.ExecContext(ctx, `INSERT INTO cs_users (name) VALUES (`+p(1)+`)`, "ShouldRollback")
 			return fmt.Errorf("intentional")
 		})
@@ -164,7 +164,7 @@ func TestContainer_Postgres(t *testing.T) {
 	dsn, err := ctr.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
 
-	registry := NewDriverRegistry()
+	registry := NewDriverRegistry[*sqlx.DB]()
 	registry.Register("postgres", &postgresDriver{})
 
 	pool := NewPool(registry)
@@ -204,7 +204,7 @@ func TestContainer_MySQL(t *testing.T) {
 	dsn, err := ctr.ConnectionString(ctx)
 	require.NoError(t, err)
 
-	registry := NewDriverRegistry()
+	registry := NewDriverRegistry[*sqlx.DB]()
 	registry.Register("mysql", &mysqlDriver{})
 
 	pool := NewPool(registry)
@@ -263,7 +263,7 @@ func TestContainer_MultiDB_PostgresAndMySQL(t *testing.T) {
 	mysDSN, err := mysCtr.ConnectionString(ctx)
 	require.NoError(t, err)
 
-	registry := NewDriverRegistry()
+	registry := NewDriverRegistry[*sqlx.DB]()
 	registry.Register("postgres", &postgresDriver{})
 	registry.Register("mysql", &mysqlDriver{})
 

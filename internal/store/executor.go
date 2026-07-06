@@ -6,18 +6,18 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-type Executor struct {
-	pool *Pool
+type Executor[T any] struct {
+	pool *Pool[T]
 }
 
-func NewExecutor(pool *Pool) *Executor {
-	return &Executor{pool: pool}
+func NewExecutor[T any](pool *Pool[T]) *Executor[T] {
+	return &Executor[T]{pool: pool}
 }
 
-// Run executes fn against the DB registered under name.
+// Run executes fn against the client registered under name.
 // Sequence: acquire throttle → run fn → release throttle.
 // A cancelled ctx returns immediately at Acquire to prevent goroutine leaks.
-func (e *Executor) Run(ctx context.Context, name string, fn func(context.Context, *sqlx.DB) error) error {
+func (e *Executor[T]) Run(ctx context.Context, name string, fn func(context.Context, T) error) error {
 	entry, err := e.pool.acquire(name)
 	if err != nil {
 		return err
@@ -28,12 +28,17 @@ func (e *Executor) Run(ctx context.Context, name string, fn func(context.Context
 		return err
 	}
 	defer entry.throttle.Release()
-	return fn(ctx, entry.db)
+	return fn(ctx, entry.client)
 }
 
 // RunTx executes fn within a transaction.
 // Commits on success; rolls back automatically on error or panic.
-func (e *Executor) RunTx(ctx context.Context, name string, fn func(context.Context, *sqlx.Tx) error) error {
+//
+// This is a package-level function constrained to *sqlx.DB, not an
+// Executor[T] method: Go generics can't express a method that only exists
+// for one type argument, and transactions are a *sqlx.DB-specific concept
+// that doesn't generalize to non-SQL clients (see docs/requirements.md).
+func RunTx(e *Executor[*sqlx.DB], ctx context.Context, name string, fn func(context.Context, *sqlx.Tx) error) error {
 	entry, err := e.pool.acquire(name)
 	if err != nil {
 		return err
@@ -45,7 +50,7 @@ func (e *Executor) RunTx(ctx context.Context, name string, fn func(context.Conte
 	}
 	defer entry.throttle.Release()
 
-	tx, err := entry.db.BeginTxx(ctx, nil)
+	tx, err := entry.client.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
 	}

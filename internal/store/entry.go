@@ -3,12 +3,10 @@ package store
 import (
 	"sync"
 	"time"
-
-	"github.com/jmoiron/sqlx"
 )
 
-type poolEntry struct {
-	db        *sqlx.DB
+type poolEntry[T any] struct {
+	client    T
 	throttle  *Throttle
 	createdAt time.Time
 	wg        sync.WaitGroup // tracks in-flight operation count

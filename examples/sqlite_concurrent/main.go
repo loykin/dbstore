@@ -23,7 +23,7 @@ func (d *SQLiteDriver) ApplyPoolConfig(db *sqlx.DB, cfg dbstore.PoolConfig) {
 }
 
 func main() {
-	registry := dbstore.NewDriverRegistry()
+	registry := dbstore.NewDriverRegistry[*sqlx.DB]()
 	registry.Register("sqlite", &SQLiteDriver{})
 
 	pool := dbstore.NewPool(registry)

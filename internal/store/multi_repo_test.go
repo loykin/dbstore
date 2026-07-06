@@ -19,10 +19,10 @@ type OrderRepository interface {
 }
 
 type sqliteOrderRepo struct {
-	BaseRepo
+	BaseRepo[*sqlx.DB]
 }
 
-func newOrderRepo(exec *Executor) OrderRepository {
+func newOrderRepo(exec *Executor[*sqlx.DB]) OrderRepository {
 	return &sqliteOrderRepo{NewBaseRepo("orders", exec)}
 }
 
@@ -42,7 +42,7 @@ func (r *sqliteOrderRepo) CountByUser(ctx context.Context, userID int) (int, err
 }
 
 // setupMultiRepo registers two independent datasources and returns repos for each.
-func setupMultiRepo(t *testing.T) (UserRepository, OrderRepository, *Executor) {
+func setupMultiRepo(t *testing.T) (UserRepository, OrderRepository, *Executor[*sqlx.DB]) {
 	t.Helper()
 	pool := newTestPool()
 	t.Cleanup(pool.RemoveAll)
@@ -62,7 +62,7 @@ func setupMultiRepo(t *testing.T) (UserRepository, OrderRepository, *Executor) {
 		return err
 	}))
 
-	users := &sqliteUserRepo{NewBaseRepo("users", exec)}
+	users := &sqliteUserRepo{NewSQLRepo("users", exec)}
 	orders := newOrderRepo(exec)
 	return users, orders, exec
 }
@@ -131,7 +131,7 @@ func TestMultiRepo_RollbackOnOneSourceDoesNotAffectOther(t *testing.T) {
 
 	require.NoError(t, orders.Create(ctx, 99, "committed"))
 
-	concrete := &sqliteUserRepo{NewBaseRepo("users", exec)}
+	concrete := &sqliteUserRepo{NewSQLRepo("users", exec)}
 	err := concrete.RunTx(ctx, func(ctx context.Context, tx *sqlx.Tx) error {
 		_, _ = tx.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, "should-rollback")
 		return errors.New("intentional")
@@ -161,14 +161,14 @@ func TestMultiRepo_TransactionAcrossReposIsIndependent(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		errs[0] = exec.RunTx(ctx, "users", func(ctx context.Context, tx *sqlx.Tx) error {
+		errs[0] = RunTx(exec, ctx, "users", func(ctx context.Context, tx *sqlx.Tx) error {
 			_, err := tx.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, "tx-user")
 			return err
 		})
 	}()
 	go func() {
 		defer wg.Done()
-		errs[1] = exec.RunTx(ctx, "orders", func(ctx context.Context, tx *sqlx.Tx) error {
+		errs[1] = RunTx(exec, ctx, "orders", func(ctx context.Context, tx *sqlx.Tx) error {
 			_, err := tx.ExecContext(ctx, `INSERT INTO orders (user_id, item) VALUES (?, ?)`, 1, "tx-item")
 			return err
 		})

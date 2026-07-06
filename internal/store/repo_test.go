@@ -2,11 +2,9 @@ package store
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,13 +23,13 @@ type UserRepository interface {
 	CreateBatch(ctx context.Context, names []string) error
 }
 
-// sqliteUserRepo is the SQLite implementation using BaseRepo.
+// sqliteUserRepo is the SQLite implementation using SQLRepo.
 type sqliteUserRepo struct {
-	BaseRepo
+	SQLRepo
 }
 
-func newUserRepo(exec *Executor) UserRepository {
-	return &sqliteUserRepo{NewBaseRepo("primary", exec)}
+func newUserRepo(exec *Executor[*sqlx.DB]) UserRepository {
+	return &sqliteUserRepo{NewSQLRepo("primary", exec)}
 }
 
 func (r *sqliteUserRepo) Create(ctx context.Context, name string) error {
@@ -69,14 +67,15 @@ func (r *sqliteUserRepo) CreateBatch(ctx context.Context, names []string) error 
 	})
 }
 
-// setupUserRepo initializes an in-memory SQLite DB with the schema for each test.
-func setupUserRepo(t *testing.T) UserRepository {
+// setupUserRepoFixture initializes an in-memory SQLite DB with the schema
+// for each test and returns a fixture usable by runUserRepoComplianceSuite.
+func setupUserRepoFixture(t *testing.T) userRepoFixture {
 	t.Helper()
 	pool := newTestPool()
 	t.Cleanup(pool.RemoveAll)
 
 	require.NoError(t, pool.Register("primary", testConfig(":memory:")))
-	exec := NewExecutor(pool)
+	exec := NewExecutor[*sqlx.DB](pool)
 
 	err := exec.Run(context.Background(), "primary", func(ctx context.Context, db *sqlx.DB) error {
 		_, err := db.ExecContext(ctx, `CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)`)
@@ -84,77 +83,14 @@ func setupUserRepo(t *testing.T) UserRepository {
 	})
 	require.NoError(t, err)
 
-	return newUserRepo(exec)
+	return userRepoFixture{
+		repo:   newUserRepo(exec),
+		exec:   exec,
+		source: "primary",
+		ph:     func(int) string { return "?" },
+	}
 }
 
-func TestUserRepo_Create_FindByID(t *testing.T) {
-	repo := setupUserRepo(t)
-	ctx := context.Background()
-
-	require.NoError(t, repo.Create(ctx, "Alice"))
-
-	u, err := repo.FindByID(ctx, 1)
-	require.NoError(t, err)
-	assert.Equal(t, "Alice", u.Name)
-}
-
-func TestUserRepo_FindAll(t *testing.T) {
-	repo := setupUserRepo(t)
-	ctx := context.Background()
-
-	require.NoError(t, repo.Create(ctx, "Alice"))
-	require.NoError(t, repo.Create(ctx, "Bob"))
-
-	users, err := repo.FindAll(ctx)
-	require.NoError(t, err)
-	assert.Len(t, users, 2)
-	assert.Equal(t, "Alice", users[0].Name)
-	assert.Equal(t, "Bob", users[1].Name)
-}
-
-func TestUserRepo_FindByID_NotFound(t *testing.T) {
-	repo := setupUserRepo(t)
-	ctx := context.Background()
-
-	_, err := repo.FindByID(ctx, 999)
-	assert.Error(t, err)
-}
-
-func TestUserRepo_CreateBatch_Commit(t *testing.T) {
-	repo := setupUserRepo(t)
-	ctx := context.Background()
-
-	err := repo.CreateBatch(ctx, []string{"Alice", "Bob", "Carol"})
-	require.NoError(t, err)
-
-	users, err := repo.FindAll(ctx)
-	require.NoError(t, err)
-	assert.Len(t, users, 3)
-}
-
-func TestUserRepo_CreateBatch_Rollback(t *testing.T) {
-	pool := newTestPool()
-	t.Cleanup(pool.RemoveAll)
-
-	require.NoError(t, pool.Register("primary", testConfig(":memory:")))
-	exec := NewExecutor(pool)
-	ctx := context.Background()
-
-	_ = exec.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error {
-		_, err := db.ExecContext(ctx, `CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)`)
-		return err
-	})
-
-	// mid-transaction failure → full rollback
-	concrete := &sqliteUserRepo{NewBaseRepo("primary", exec)}
-	err := concrete.RunTx(ctx, func(ctx context.Context, tx *sqlx.Tx) error {
-		_, _ = tx.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, "Alice")
-		return errors.New("intentional error")
-	})
-	assert.Error(t, err)
-
-	repo := newUserRepo(exec)
-	users, err := repo.FindAll(ctx)
-	require.NoError(t, err)
-	assert.Len(t, users, 0)
+func TestUserRepoCompliance_SQLite(t *testing.T) {
+	runUserRepoComplianceSuite(t, setupUserRepoFixture)
 }

@@ -6,22 +6,38 @@ import (
 	"time"
 )
 
-type Pool struct {
-	mu      sync.Mutex
-	entries map[string]*poolEntry
-	driver  *DriverRegistry
+// Closer is an optional capability a pooled client may implement so Pool
+// can release its resources on Remove/RemoveAll. It is checked via type
+// assertion rather than required as a type constraint on Pool[T], because
+// not every client exposes an explicit close — e.g. an HTTP-based client
+// like opensearch-go has no Close() method at all.
+type Closer interface {
+	Close() error
 }
 
-func NewPool(registry *DriverRegistry) *Pool {
-	return &Pool{
-		entries: make(map[string]*poolEntry),
+func closeClient[T any](client T) error {
+	if c, ok := any(client).(Closer); ok {
+		return c.Close()
+	}
+	return nil
+}
+
+type Pool[T any] struct {
+	mu      sync.Mutex
+	entries map[string]*poolEntry[T]
+	driver  *DriverRegistry[T]
+}
+
+func NewPool[T any](registry *DriverRegistry[T]) *Pool[T] {
+	return &Pool[T]{
+		entries: make(map[string]*poolEntry[T]),
 		driver:  registry,
 	}
 }
 
 // Register adds a datasource by name and initializes its connection.
 // TCP connection (including Ping) is performed outside the mutex to avoid lock contention.
-func (p *Pool) Register(name string, cfg DriverConfig) error {
+func (p *Pool[T]) Register(name string, cfg DriverConfig) error {
 	p.mu.Lock()
 	if _, exists := p.entries[name]; exists {
 		p.mu.Unlock()
@@ -29,7 +45,7 @@ func (p *Pool) Register(name string, cfg DriverConfig) error {
 	}
 	p.mu.Unlock()
 
-	db, err := p.driver.open(cfg)
+	client, err := p.driver.open(cfg)
 	if err != nil {
 		return fmt.Errorf("dbstore: open %q: %w", name, err)
 	}
@@ -37,11 +53,11 @@ func (p *Pool) Register(name string, cfg DriverConfig) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if _, exists := p.entries[name]; exists {
-		_ = db.Close()
+		_ = closeClient(client)
 		return fmt.Errorf("dbstore: %q already registered", name)
 	}
-	p.entries[name] = &poolEntry{
-		db:        db,
+	p.entries[name] = &poolEntry[T]{
+		client:    client,
 		throttle:  newThrottle(cfg.PoolConfig.MaxConcurrency),
 		createdAt: time.Now(),
 	}
@@ -50,7 +66,7 @@ func (p *Pool) Register(name string, cfg DriverConfig) error {
 
 // Remove unregisters a datasource and closes its connection pool.
 // Waits for all in-flight operations to complete before closing.
-func (p *Pool) Remove(name string) error {
+func (p *Pool[T]) Remove(name string) error {
 	p.mu.Lock()
 	entry, ok := p.entries[name]
 	if !ok {
@@ -61,25 +77,25 @@ func (p *Pool) Remove(name string) error {
 	p.mu.Unlock()
 
 	entry.wg.Wait() // wait for in-flight operations to finish
-	return entry.db.Close()
+	return closeClient(entry.client)
 }
 
 // RemoveAll removes all registered datasources; call on server shutdown.
-func (p *Pool) RemoveAll() {
+func (p *Pool[T]) RemoveAll() {
 	p.mu.Lock()
 	entries := p.entries
-	p.entries = make(map[string]*poolEntry)
+	p.entries = make(map[string]*poolEntry[T])
 	p.mu.Unlock()
 
 	for _, entry := range entries {
 		entry.wg.Wait()
-		_ = entry.db.Close()
+		_ = closeClient(entry.client)
 	}
 }
 
 // acquire returns the entry and increments the in-flight counter.
 // wg.Add(1) is called under the mutex to prevent a race with Remove.
-func (p *Pool) acquire(name string) (*poolEntry, error) {
+func (p *Pool[T]) acquire(name string) (*poolEntry[T], error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	entry, ok := p.entries[name]
@@ -90,12 +106,12 @@ func (p *Pool) acquire(name string) (*poolEntry, error) {
 	return entry, nil
 }
 
-func (p *Pool) release(entry *poolEntry) {
+func (p *Pool[T]) release(entry *poolEntry[T]) {
 	entry.wg.Done()
 }
 
 // get is for tests only — checks entry existence without incrementing wg.
-func (p *Pool) get(name string) (*poolEntry, error) {
+func (p *Pool[T]) get(name string) (*poolEntry[T], error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	entry, ok := p.entries[name]
