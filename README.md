@@ -164,6 +164,10 @@ func (r *userRepo) Delete(ctx context.Context, id int) error {
 }
 ```
 
+For a non-SQL REST client example, see `examples/opensearch`. It uses
+`BaseRepo[*opensearchapi.Client]` directly because OpenSearch has no SQL
+transaction concept.
+
 ### 6. Wiring (main.go)
 
 ```go

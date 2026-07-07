@@ -69,6 +69,10 @@ jobs:
         working-directory: examples/repository
         run: go test ./...
 
+      - name: Test opensearch
+        working-directory: examples/opensearch
+        run: go test ./...
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
