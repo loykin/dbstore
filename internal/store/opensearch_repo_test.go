@@ -3,9 +3,7 @@
 // This file finishes what opensearch_research_test.go started: it
 // instantiates the actual generic Pool[T]/Executor[T]/BaseRepo[T] from
 // pool.go/executor.go/repo.go with T = *opensearchapi.Client, end to end,
-// against a real OpenSearch container. This is the "검증 계획" step from
-// docs/requirements.md — building the generic design against a real
-// backend's actual requirements instead of guessing.
+// against a real OpenSearch container.
 package store
 
 import (

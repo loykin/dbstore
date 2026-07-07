@@ -11,7 +11,7 @@ The problem dbstore actually solves isn't "support more drivers." Any app with m
 1. **Connection/lifecycle/throttle plumbing gets rewritten per datasource config.** `Register`/`Remove`/`RemoveAll` + a per-datasource concurrency throttle should be written once and reused, not reimplemented for every new backend.
 2. **Backend implementations drift.** When the same repository interface has two implementations (e.g. Postgres and SQLite, or a SQL backend and a search/document backend), a fix applied to one is easy to forget in the other — and that gap is hard to catch by reading code alone.
 
-dbstore addresses (1) with generic `Pool[T]`/`Executor[T]`/`BaseRepo[T]` — the lifecycle machinery is written once and reused regardless of client type (SQL or not; see [docs/requirements.md](docs/requirements.md) for the non-SQL generalization and an OpenSearch-backed example). It addresses (2) by making it easy to run one compliance test suite against every backend implementation of an interface, so drift surfaces as a failing test instead of a production bug.
+dbstore addresses (1) with generic `Pool[T]`/`Executor[T]`/`BaseRepo[T]`: the lifecycle machinery is written once and reused regardless of client type. It addresses (2) by making it easy to run one compliance test suite against every backend implementation of an interface, so drift surfaces as a failing test instead of a production bug.
 
 On top of that, dbstore also solves the everyday `database/sql` pain points:
 
@@ -116,6 +116,8 @@ err := dbstore.RunTx(executor, ctx, "primary", func(ctx context.Context, tx *sql
 ```
 
 ### 5. Repository pattern
+
+See `examples/repository` for a runnable version of this pattern.
 
 ```go
 // app defines the interface

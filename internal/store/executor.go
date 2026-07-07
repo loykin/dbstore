@@ -37,7 +37,7 @@ func (e *Executor[T]) Run(ctx context.Context, name string, fn func(context.Cont
 // This is a package-level function constrained to *sqlx.DB, not an
 // Executor[T] method: Go generics can't express a method that only exists
 // for one type argument, and transactions are a *sqlx.DB-specific concept
-// that doesn't generalize to non-SQL clients (see docs/requirements.md).
+// that doesn't generalize to non-SQL clients.
 func RunTx(e *Executor[*sqlx.DB], ctx context.Context, name string, fn func(context.Context, *sqlx.Tx) error) error {
 	entry, err := e.pool.acquire(name)
 	if err != nil {

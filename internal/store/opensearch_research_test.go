@@ -1,10 +1,8 @@
 //go:build integration
 
-// This file is research, not product code: it exists to validate (or
-// invalidate) the `Pool[T Closer]` design proposed in docs/requirements.md
-// against the real github.com/opensearch-project/opensearch-go/v4 client,
-// per the doc's own "검증 계획" (don't design Pool[T] abstractly — build it
-// against a real backend's actual requirements first).
+// This file is research, not product code: it exists to validate Pool[T]
+// design assumptions against the real github.com/opensearch-project/opensearch-go/v4
+// client.
 package store
 
 import (

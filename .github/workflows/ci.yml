@@ -43,7 +43,7 @@ jobs:
         run: go test -v -tags integration -timeout=300s ./internal/store/
 
   examples:
-    name: Build examples
+    name: Test examples
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -53,17 +53,21 @@ jobs:
           go-version: stable
           cache: true
 
-      - name: Build basic
+      - name: Test basic
         working-directory: examples/basic
-        run: go build .
+        run: go test ./...
 
-      - name: Build multi_db
+      - name: Test multi_db
         working-directory: examples/multi_db
-        run: go build .
+        run: go test ./...
 
-      - name: Build sqlite_concurrent
+      - name: Test sqlite_concurrent
         working-directory: examples/sqlite_concurrent
-        run: go build .
+        run: go test ./...
+
+      - name: Test repository
+        working-directory: examples/repository
+        run: go test ./...
 
   lint:
     name: Lint
