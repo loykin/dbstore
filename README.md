@@ -1,20 +1,25 @@
 # dbstore
 
-A Go library for registering and managing multiple databases by name.
+A Go library for registering and managing multiple databases — and, more generally, multiple backend implementations of the same repository interface — by name.
 
 Provides connection pool management, Repository pattern, and transactions through a single interface.
 
 ## Why
 
-Go's `database/sql` has a built-in connection pool, but with default settings idle connections are never reclaimed. Without `SetConnMaxIdleTime`, idle connections pile up, hit `MaxOpenConns`, and new queries fail to acquire a connection.
+The problem dbstore actually solves isn't "support more drivers." Any app with more than one datasource (primary/replica, per-tenant DBs, or a SQL backend alongside a non-SQL one) runs into two recurring costs:
 
-dbstore solves the following problems:
+1. **Connection/lifecycle/throttle plumbing gets rewritten per datasource config.** `Register`/`Remove`/`RemoveAll` + a per-datasource concurrency throttle should be written once and reused, not reimplemented for every new backend.
+2. **Backend implementations drift.** When the same repository interface has two implementations (e.g. Postgres and SQLite, or a SQL backend and a search/document backend), a fix applied to one is easy to forget in the other — and that gap is hard to catch by reading code alone.
 
-- **Idle connection leak** — enforces a `MaxIdleTime` default to automatically reclaim idle connections
+dbstore addresses (1) with generic `Pool[T]`/`Executor[T]`/`BaseRepo[T]` — the lifecycle machinery is written once and reused regardless of client type (SQL or not; see [docs/requirements.md](docs/requirements.md) for the non-SQL generalization and an OpenSearch-backed example). It addresses (2) by making it easy to run one compliance test suite against every backend implementation of an interface, so drift surfaces as a failing test instead of a production bug.
+
+On top of that, dbstore also solves the everyday `database/sql` pain points:
+
+- **Idle connection leak** — enforces a `MaxIdleTime` default to automatically reclaim idle connections (Go's `database/sql` pool never reclaims them on its own)
 - **Multi-DB management** — registers and looks up Primary/Replica, analytics DB, service DB, etc. by name
 - **Concurrent query surge protection** — per-datasource semaphore controls query bursts against a specific DB
 - **Connection lifecycle** — the library manages connections directly; callers never call `db.Close()`
-- **Repository pattern** — embed `BaseRepo` to build an interface-based data layer
+- **Repository pattern** — embed `BaseRepo`/`SQLRepo` to build an interface-based data layer
 - **Transactions** — `RunTx` handles commit/rollback automatically
 
 ## Installation
@@ -28,12 +33,14 @@ go get github.com/loykin/dbstore
 ```
 dbstore (library)            app
 ─────────────────────        ──────────────────────────────
-Pool                    →    pool.Register("primary", cfg)
-Executor                →    executor.Run / executor.RunTx
-BaseRepo (embed)        →    type userRepo struct { dbstore.BaseRepo }
+Pool[T]                 →    pool.Register("primary", cfg)
+Executor[T]             →    executor.Run / dbstore.RunTx(executor, ...)
+BaseRepo[T] (embed)     →    type userRepo struct { dbstore.SQLRepo }
                              type UserRepository interface { ... }
                              func NewUserRepo(...) UserRepository
 ```
+
+`Pool`/`Executor`/`BaseRepo` are generic over the client type `T` (e.g. `*sqlx.DB`); everything below uses `T = *sqlx.DB`, the common case.
 
 dbstore provides only the infrastructure. Interfaces and implementations are defined by the application.
 
@@ -53,10 +60,12 @@ func (d *PostgresDriver) ApplyPoolConfig(db *sqlx.DB, cfg dbstore.PoolConfig) {
 }
 ```
 
+`ApplyPoolConfig` is optional — implement it only if your client type has connection-pool settings to tune (see `dbstore.PoolConfigApplier[T]`). A driver for a non-SQL client (no connection pool to configure) can skip it entirely.
+
 ### 2. Initialize the pool
 
 ```go
-registry := dbstore.NewDriverRegistry()
+registry := dbstore.NewDriverRegistry[*sqlx.DB]()
 registry.Register("postgres", &PostgresDriver{})
 
 pool := dbstore.NewPool(registry)
@@ -93,8 +102,10 @@ err := executor.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error
 
 ### 4. Transactions
 
+`RunTx` is a package-level function, not an `Executor` method — transactions are a `*sqlx.DB`-specific concept that doesn't generalize to every client type `T`, so it's constrained to `*Executor[*sqlx.DB]` instead of being part of the generic `Executor[T]` API.
+
 ```go
-err := executor.RunTx(ctx, "primary", func(ctx context.Context, tx *sqlx.Tx) error {
+err := dbstore.RunTx(executor, ctx, "primary", func(ctx context.Context, tx *sqlx.Tx) error {
     if _, err := tx.ExecContext(ctx, `UPDATE accounts SET balance = balance - $1 WHERE id = $2`, amount, from); err != nil {
         return err
     }
@@ -114,16 +125,18 @@ type UserRepository interface {
     Delete(ctx context.Context, id int) error
 }
 
-// app writes the implementation — embed BaseRepo
+// app writes the implementation — embed SQLRepo for RunTx support
+// (embed dbstore.BaseRepo[*sqlx.DB] directly instead if the repo only
+// ever needs Run, not transactions).
 type userRepo struct {
-    dbstore.BaseRepo
+    dbstore.SQLRepo
 }
 
 // compile-time contract check
 var _ UserRepository = (*userRepo)(nil)
 
-func NewUserRepo(exec *dbstore.Executor, name string) UserRepository {
-    return &userRepo{dbstore.NewBaseRepo(name, exec)}
+func NewUserRepo(exec *dbstore.Executor[*sqlx.DB], name string) UserRepository {
+    return &userRepo{dbstore.NewSQLRepo(name, exec)}
 }
 
 func (r *userRepo) Create(ctx context.Context, name string) error {
@@ -234,10 +247,12 @@ var DefaultPoolConfig = PoolConfig{
 
 ```
 config.go    — DriverConfig, PoolConfig, DefaultPoolConfig
-driver.go    — DriverBuilder interface, DriverRegistry, DefaultApplyPoolConfig
+driver.go    — DriverBuilder[T], PoolConfigApplier[T] (optional), DriverRegistry[T], DefaultApplyPoolConfig
 throttle.go  — per-datasource semaphore
-entry.go     — poolEntry (internal)
-pool.go      — Pool (Register / Remove / RemoveAll)
-executor.go  — Executor (Run / RunTx)
-repo.go      — BaseRepo (Run / RunTx)
+entry.go     — poolEntry[T] (internal)
+pool.go      — Pool[T] (Register / Remove / RemoveAll), Closer (optional)
+executor.go  — Executor[T] (Run), RunTx (package-level, *sqlx.DB only)
+repo.go      — BaseRepo[T] (Run), SQLRepo (BaseRepo[*sqlx.DB] + RunTx)
 ```
+
+`Closer` and `PoolConfigApplier[T]` are optional capabilities, checked via type assertion — a client type only needs to implement them if it actually has something to close or pool-configure. Non-SQL clients (e.g. an HTTP-based client) typically implement neither.
