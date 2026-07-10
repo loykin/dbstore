@@ -126,6 +126,19 @@ as `_ "modernc.org/sqlite"` or `_ "github.com/lib/pq"`. Implement a custom
 driver only when opening the client needs custom parsing, authentication, or
 connection behavior beyond `sqlx.Connect(driverName, dsn)`.
 
+Custom SQL drivers still plug into the same adapter:
+
+```go
+type TenantSQLiteDriver struct{}
+
+func (d TenantSQLiteDriver) Open(cfg dbstore.SourceConfig) (*sqlx.DB, error) {
+	dsn := "file:" + cfg.DSN + "?mode=memory&cache=shared"
+	return sqlx.Connect(sqlxadapter.DriverSQLite, dsn)
+}
+
+sql.RegisterDriver("tenant-sqlite", TenantSQLiteDriver{})
+```
+
 Default SQL driver registrations:
 
 ```text
@@ -301,6 +314,7 @@ repo := NewUserRepo(exec, "tenant-"+id)
 ```text
 examples/basic             SQLite driver registration with sqlxadapter
 examples/sql_drivers       SQLite and PostgreSQL driver registration
+examples/custom_sql_driver custom SQL driver registration with sqlxadapter
 examples/rest              custom REST driver registration with restadapter
 examples/custom_adapter    custom backend client registration with dbstore.NewAdapter[T]
 examples/opensearch        OpenSearch SDK client registration
