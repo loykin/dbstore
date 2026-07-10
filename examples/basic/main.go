@@ -12,16 +12,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-type SQLiteDriver struct{}
-
-func (d *SQLiteDriver) Open(cfg dbstore.SourceConfig) (*sqlx.DB, error) {
-	return sqlx.Connect("sqlite", cfg.DSN)
-}
-
-func (d *SQLiteDriver) ApplyPoolConfig(db *sqlx.DB, cfg dbstore.PoolConfig) {
-	sqlxadapter.ApplyPoolConfig(db, cfg)
-}
-
 var sqlitePoolConfig = dbstore.PoolConfig{
 	MaxOpenConns:   1,
 	MaxIdleConns:   1,
@@ -32,11 +22,11 @@ var sqlitePoolConfig = dbstore.PoolConfig{
 
 func main() {
 	sql := sqlxadapter.New()
-	sql.RegisterDriver("sqlite", &SQLiteDriver{})
+	sql.RegisterDefaultDrivers()
 	defer sql.Close()
 
 	if err := sql.Open("main", dbstore.SourceConfig{
-		Driver:     "sqlite",
+		Driver:     sqlxadapter.DriverSQLite,
 		DSN:        ":memory:",
 		PoolConfig: sqlitePoolConfig,
 	}); err != nil {

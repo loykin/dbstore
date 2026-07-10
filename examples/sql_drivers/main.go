@@ -14,26 +14,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-type SQLiteDriver struct{}
-
-func (d SQLiteDriver) Open(cfg dbstore.SourceConfig) (*sqlx.DB, error) {
-	return sqlx.Connect("sqlite", cfg.DSN)
-}
-
-func (d SQLiteDriver) ApplyPoolConfig(db *sqlx.DB, cfg dbstore.PoolConfig) {
-	sqlxadapter.ApplyPoolConfig(db, cfg)
-}
-
-type PostgresDriver struct{}
-
-func (d PostgresDriver) Open(cfg dbstore.SourceConfig) (*sqlx.DB, error) {
-	return sqlx.Connect("postgres", cfg.DSN)
-}
-
-func (d PostgresDriver) ApplyPoolConfig(db *sqlx.DB, cfg dbstore.PoolConfig) {
-	sqlxadapter.ApplyPoolConfig(db, cfg)
-}
-
 var singleConnPoolConfig = dbstore.PoolConfig{
 	MaxOpenConns:   1,
 	MaxIdleConns:   1,
@@ -46,12 +26,11 @@ func main() {
 	ctx := context.Background()
 
 	sql := sqlxadapter.New()
-	sql.RegisterDriver("sqlite", SQLiteDriver{})
-	sql.RegisterDriver("postgres", PostgresDriver{})
+	sql.RegisterDefaultDrivers()
 	defer sql.Close()
 
 	if err := sql.Open("local", dbstore.SourceConfig{
-		Driver:     "sqlite",
+		Driver:     sqlxadapter.DriverSQLite,
 		DSN:        ":memory:",
 		PoolConfig: singleConnPoolConfig,
 	}); err != nil {
@@ -60,7 +39,7 @@ func main() {
 
 	if postgresDSN := os.Getenv("POSTGRES_DSN"); postgresDSN != "" {
 		if err := sql.Open("warehouse", dbstore.SourceConfig{
-			Driver:     "postgres",
+			Driver:     sqlxadapter.DriverPostgres,
 			DSN:        postgresDSN,
 			PoolConfig: dbstore.DefaultPoolConfig,
 		}); err != nil {

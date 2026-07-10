@@ -1,18 +1,42 @@
 # dbstore
 
-dbstore is a small Go runtime for named backend sources.
+dbstore is a small Go runtime for building repository implementations over
+named backend sources.
 
 It does not try to hide the differences between SQL, REST, messaging, object
 storage, or other backends. It only standardizes the runtime boundary around a
-backend client:
+backend client so repositories can be explicit, testable, and lifecycle-safe:
 
 ```text
-Adapter[T] -> Directory[T] -> Executor[T] -> Source[T]
+Repository Interface
+  -> Repository Implementation
+  -> Source[T]
+  -> Executor[T]
+  -> Directory[T]
+  -> Adapter[T]
+  -> DriverBuilder[T]
 ```
 
-The application still owns its repository interfaces and backend-specific
+From the infrastructure side, the same chain is assembled in reverse:
+
+```text
+DriverBuilder[T]
+  -> Adapter[T]
+  -> Directory[T]
+  -> Executor[T]
+  -> Source[T]
+  -> Repository Implementation
+  -> Repository Interface
+```
+
+The repository is the important application boundary. The application owns its
+repository interfaces, repository implementations, and backend-specific
 operations. dbstore owns source registration, lifecycle, throttling, and scoped
 client access.
+
+In other words, dbstore stops at `Source[T]`. Repository implementations keep a
+source field and translate backend-specific operations into the application's
+repository contract.
 
 ## Packages
 
@@ -45,27 +69,40 @@ An adapter registers drivers, opens named sources, and owns their lifecycle.
 
 ```go
 sql := sqlxadapter.New()
-sql.RegisterDriver("postgres", &PostgresDriver{})
+sql.RegisterDefaultDrivers()
 defer sql.Close()
 
 err := sql.Open("primary", dbstore.SourceConfig{
-	Driver:     "postgres",
+	Driver:     sqlxadapter.DriverPostgres,
 	DSN:        postgresDSN,
 	PoolConfig: dbstore.DefaultPoolConfig,
 })
 ```
 
-### Source
+### Source And Repository
 
-A source is the application-facing handle used by repository implementations.
+A source is the runtime handle kept by repository implementations. The
+repository stays application-owned; dbstore only provides scoped access to the
+registered backend client.
 
 ```go
 exec := sql.Executor()
-source := dbstore.NewSource("primary", exec)
 
-err := source.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
-	return db.QueryRowContext(ctx, "SELECT name FROM users WHERE id = $1", id).Scan(&name)
-})
+type userRepo struct {
+	source dbstore.Source[*sqlx.DB]
+}
+
+func NewUserRepo(exec *dbstore.Executor[*sqlx.DB]) *userRepo {
+	return &userRepo{source: dbstore.NewSource("primary", exec)}
+}
+
+func (r *userRepo) FindName(ctx context.Context, id int) (string, error) {
+	var name string
+	err := r.source.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
+		return db.QueryRowContext(ctx, "SELECT name FROM users WHERE id = $1", id).Scan(&name)
+	})
+	return name, err
+}
 ```
 
 `Executor.Run` is the lower-level primitive. Repository code should normally
@@ -80,15 +117,23 @@ import sqlxadapter "github.com/loykin/dbstore/adapters/sqlx"
 ```
 
 ```go
-type PostgresDriver struct{}
+sql := sqlxadapter.New()
+sql.RegisterDefaultDrivers()
+```
 
-func (d *PostgresDriver) Open(cfg dbstore.SourceConfig) (*sqlx.DB, error) {
-	return sqlx.Connect("postgres", cfg.DSN)
-}
+The application still imports the concrete `database/sql` driver package, such
+as `_ "modernc.org/sqlite"` or `_ "github.com/lib/pq"`. Implement a custom
+driver only when opening the client needs custom parsing, authentication, or
+connection behavior beyond `sqlx.Connect(driverName, dsn)`.
 
-func (d *PostgresDriver) ApplyPoolConfig(db *sqlx.DB, cfg dbstore.PoolConfig) {
-	sqlxadapter.ApplyPoolConfig(db, cfg)
-}
+Default SQL driver registrations:
+
+```text
+sqlxadapter.DriverSQLite     -> database/sql driver "sqlite"
+sqlxadapter.DriverPostgres   -> database/sql driver "postgres"
+sqlxadapter.DriverMySQL      -> database/sql driver "mysql"
+sqlxadapter.DriverMariaDB    -> database/sql driver "mysql"
+sqlxadapter.DriverClickHouse -> database/sql driver "clickhouse"
 ```
 
 For repositories that need transactions, keep a `sqlxadapter.Source` field.

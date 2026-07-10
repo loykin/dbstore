@@ -17,6 +17,14 @@ func (a *Adapter) RegisterDriver(name string, driver dbstore.DriverBuilder[*sqlx
 	a.core.RegisterDriver(name, driver)
 }
 
+func (a *Adapter) RegisterDefaultDrivers() {
+	a.RegisterDriver(DriverSQLite, SQLiteDriver())
+	a.RegisterDriver(DriverPostgres, PostgresDriver())
+	a.RegisterDriver(DriverMySQL, MySQLDriver())
+	a.RegisterDriver(DriverMariaDB, MariaDBDriver())
+	a.RegisterDriver(DriverClickHouse, ClickHouseDriver())
+}
+
 func (a *Adapter) Open(name string, cfg dbstore.SourceConfig) error {
 	return a.core.Open(name, cfg)
 }

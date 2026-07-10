@@ -9,24 +9,14 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-type sqliteDriver struct{}
-
-func (d sqliteDriver) Open(cfg dbstore.SourceConfig) (*sqlx.DB, error) {
-	return sqlx.Connect("sqlite", cfg.DSN)
-}
-
-func (d sqliteDriver) ApplyPoolConfig(db *sqlx.DB, cfg dbstore.PoolConfig) {
-	ApplyPoolConfig(db, cfg)
-}
-
 func TestSource_RunTx(t *testing.T) {
 	ctx := context.Background()
 	adapter := New()
-	adapter.RegisterDriver("sqlite", sqliteDriver{})
+	adapter.RegisterDefaultDrivers()
 	defer adapter.Close()
 
 	if err := adapter.Open("primary", dbstore.SourceConfig{
-		Driver: "sqlite",
+		Driver: DriverSQLite,
 		DSN:    ":memory:",
 		PoolConfig: dbstore.PoolConfig{
 			MaxOpenConns:   1,
@@ -68,11 +58,11 @@ func TestSource_RunTx(t *testing.T) {
 func TestRunTx_Rollback(t *testing.T) {
 	ctx := context.Background()
 	adapter := New()
-	adapter.RegisterDriver("sqlite", sqliteDriver{})
+	adapter.RegisterDefaultDrivers()
 	defer adapter.Close()
 
 	if err := adapter.Open("primary", dbstore.SourceConfig{
-		Driver: "sqlite",
+		Driver: DriverSQLite,
 		DSN:    ":memory:",
 		PoolConfig: dbstore.PoolConfig{
 			MaxOpenConns:   1,

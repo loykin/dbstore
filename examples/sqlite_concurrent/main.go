@@ -13,24 +13,14 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-type SQLiteDriver struct{}
-
-func (d *SQLiteDriver) Open(cfg dbstore.SourceConfig) (*sqlx.DB, error) {
-	return sqlx.Connect("sqlite", cfg.DSN)
-}
-
-func (d *SQLiteDriver) ApplyPoolConfig(db *sqlx.DB, cfg dbstore.PoolConfig) {
-	sqlxadapter.ApplyPoolConfig(db, cfg)
-}
-
 func main() {
 	sql := sqlxadapter.New()
-	sql.RegisterDriver("sqlite", &SQLiteDriver{})
+	sql.RegisterDefaultDrivers()
 	defer sql.Close()
 
 	// MaxConcurrency=1 serializes concurrent writes
 	if err := sql.Open("db", dbstore.SourceConfig{
-		Driver: "sqlite",
+		Driver: sqlxadapter.DriverSQLite,
 		DSN:    "file:concurrent?mode=memory&cache=shared",
 		PoolConfig: dbstore.PoolConfig{
 			MaxOpenConns:   1,
