@@ -19,7 +19,7 @@ func FuzzPool_Register(f *testing.F) {
 	f.Add(strings.Repeat("x", 512))
 
 	f.Fuzz(func(t *testing.T, name string) {
-		pool := newTestPool()
+		pool := newTestDirectory()
 		defer pool.RemoveAll()
 
 		_ = pool.Register(name, testConfig(":memory:"))
@@ -35,7 +35,7 @@ func FuzzPool_AcquireRelease(f *testing.F) {
 	f.Add("", "")
 
 	f.Fuzz(func(t *testing.T, registerName, acquireName string) {
-		pool := newTestPool()
+		pool := newTestDirectory()
 		defer pool.RemoveAll()
 
 		_ = pool.Register(registerName, testConfig(":memory:"))
@@ -56,7 +56,7 @@ func FuzzExecutor_Run(f *testing.F) {
 	f.Add("primary", "NOT VALID SQL 🔥")
 
 	f.Fuzz(func(t *testing.T, name, query string) {
-		pool := newTestPool()
+		pool := newTestDirectory()
 		defer pool.RemoveAll()
 
 		_ = pool.Register("primary", testConfig(":memory:"))

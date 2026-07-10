@@ -26,7 +26,7 @@ func TestPool_Chaos_GoroutineLeaks(t *testing.T) {
 
 	const cycles = 20
 	for cycle := 0; cycle < cycles; cycle++ {
-		pool := newTestPool()
+		pool := newTestDirectory()
 
 		cfg := testConfig(fmt.Sprintf("file:chaos_%d?mode=memory&cache=shared", cycle))
 		cfg.PoolConfig.MaxConcurrency = 5
@@ -87,7 +87,7 @@ func TestPool_Chaos_MemoryStability(t *testing.T) {
 	duration := parseChaosEnv("DBSTORE_CHAOS_DURATION", 2*time.Minute)
 	t.Logf("running memory stability test for %v", duration)
 
-	pool := newTestPool()
+	pool := newTestDirectory()
 	defer pool.RemoveAll()
 
 	const dbCount = 3

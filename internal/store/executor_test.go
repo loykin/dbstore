@@ -13,7 +13,7 @@ import (
 )
 
 func TestExecutor_Run(t *testing.T) {
-	pool := newTestPool()
+	pool := newTestDirectory()
 	defer pool.RemoveAll()
 
 	require.NoError(t, pool.Register("primary", testConfig(":memory:")))
@@ -30,7 +30,7 @@ func TestExecutor_Run(t *testing.T) {
 }
 
 func TestExecutor_Run_NotFound(t *testing.T) {
-	pool := newTestPool()
+	pool := newTestDirectory()
 	executor := NewExecutor(pool)
 
 	err := executor.Run(context.Background(), "nonexistent", func(ctx context.Context, db *sqlx.DB) error {
@@ -40,7 +40,7 @@ func TestExecutor_Run_NotFound(t *testing.T) {
 }
 
 func TestExecutor_Run_ContextCancelledBeforeRun(t *testing.T) {
-	pool := newTestPool()
+	pool := newTestDirectory()
 	defer pool.RemoveAll()
 
 	require.NoError(t, pool.Register("primary", testConfig(":memory:")))
@@ -59,7 +59,7 @@ func TestExecutor_Run_ContextCancelledBeforeRun(t *testing.T) {
 }
 
 func TestExecutor_Run_ThrottleBlocks(t *testing.T) {
-	pool := newTestPool()
+	pool := newTestDirectory()
 	defer pool.RemoveAll()
 
 	cfg := testConfig(":memory:")
@@ -93,7 +93,7 @@ func TestExecutor_Run_ThrottleBlocks(t *testing.T) {
 }
 
 func TestExecutor_Run_Query(t *testing.T) {
-	pool := newTestPool()
+	pool := newTestDirectory()
 	defer pool.RemoveAll()
 
 	require.NoError(t, pool.Register("primary", testConfig(":memory:")))
@@ -124,7 +124,7 @@ func TestExecutor_Run_Query(t *testing.T) {
 }
 
 func TestExecutor_SQLWorkCanUseTransactionInsideRun(t *testing.T) {
-	pool := newTestPool()
+	pool := newTestDirectory()
 	defer pool.RemoveAll()
 
 	require.NoError(t, pool.Register("primary", testConfig(":memory:")))
@@ -152,7 +152,7 @@ func TestExecutor_SQLWorkCanUseTransactionInsideRun(t *testing.T) {
 }
 
 func TestExecutor_SQLTransactionRollbackInsideRun(t *testing.T) {
-	pool := newTestPool()
+	pool := newTestDirectory()
 	defer pool.RemoveAll()
 
 	require.NoError(t, pool.Register("primary", testConfig(":memory:")))

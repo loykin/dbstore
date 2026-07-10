@@ -1,0 +1,27 @@
+package restadapter
+
+import "github.com/loykin/dbstore"
+
+type Adapter struct {
+	core *dbstore.Adapter[*Client]
+}
+
+func New() *Adapter {
+	return &Adapter{core: dbstore.NewAdapter[*Client]()}
+}
+
+func (a *Adapter) RegisterDriver(name string, driver dbstore.DriverBuilder[*Client]) {
+	a.core.RegisterDriver(name, driver)
+}
+
+func (a *Adapter) Open(name string, cfg dbstore.SourceConfig) error {
+	return a.core.Open(name, cfg)
+}
+
+func (a *Adapter) Executor() *dbstore.Executor[*Client] {
+	return a.core.Executor()
+}
+
+func (a *Adapter) Close() {
+	a.core.Close()
+}

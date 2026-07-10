@@ -23,7 +23,7 @@ import (
 
 type postgresDriver struct{}
 
-func (d *postgresDriver) Open(cfg DriverConfig) (*sqlx.DB, error) {
+func (d *postgresDriver) Open(cfg SourceConfig) (*sqlx.DB, error) {
 	return sqlx.Connect("postgres", cfg.DSN)
 }
 
@@ -33,7 +33,7 @@ func (d *postgresDriver) ApplyPoolConfig(db *sqlx.DB, cfg PoolConfig) {
 
 type mysqlDriver struct{}
 
-func (d *mysqlDriver) Open(cfg DriverConfig) (*sqlx.DB, error) {
+func (d *mysqlDriver) Open(cfg SourceConfig) (*sqlx.DB, error) {
 	return sqlx.Connect("mysql", cfg.DSN)
 }
 
@@ -167,10 +167,10 @@ func TestContainer_Postgres(t *testing.T) {
 	registry := NewDriverRegistry[*sqlx.DB]()
 	registry.Register("postgres", &postgresDriver{})
 
-	pool := NewPool(registry)
+	pool := NewDirectory(registry)
 	t.Cleanup(pool.RemoveAll)
 
-	require.NoError(t, pool.Register("primary", DriverConfig{
+	require.NoError(t, pool.Register("primary", SourceConfig{
 		Driver:     "postgres",
 		DSN:        dsn,
 		PoolConfig: DefaultPoolConfig,
@@ -207,10 +207,10 @@ func TestContainer_MySQL(t *testing.T) {
 	registry := NewDriverRegistry[*sqlx.DB]()
 	registry.Register("mysql", &mysqlDriver{})
 
-	pool := NewPool(registry)
+	pool := NewDirectory(registry)
 	t.Cleanup(pool.RemoveAll)
 
-	require.NoError(t, pool.Register("primary", DriverConfig{
+	require.NoError(t, pool.Register("primary", SourceConfig{
 		Driver:     "mysql",
 		DSN:        dsn,
 		PoolConfig: DefaultPoolConfig,
@@ -267,11 +267,11 @@ func TestContainer_MultiDB_PostgresAndMySQL(t *testing.T) {
 	registry.Register("postgres", &postgresDriver{})
 	registry.Register("mysql", &mysqlDriver{})
 
-	pool := NewPool(registry)
+	pool := NewDirectory(registry)
 	t.Cleanup(pool.RemoveAll)
 
-	require.NoError(t, pool.Register("pg", DriverConfig{Driver: "postgres", DSN: pgDSN, PoolConfig: DefaultPoolConfig}))
-	require.NoError(t, pool.Register("my", DriverConfig{Driver: "mysql", DSN: mysDSN, PoolConfig: DefaultPoolConfig}))
+	require.NoError(t, pool.Register("pg", SourceConfig{Driver: "postgres", DSN: pgDSN, PoolConfig: DefaultPoolConfig}))
+	require.NoError(t, pool.Register("my", SourceConfig{Driver: "mysql", DSN: mysDSN, PoolConfig: DefaultPoolConfig}))
 
 	exec := NewExecutor(pool)
 

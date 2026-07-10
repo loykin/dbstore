@@ -20,7 +20,7 @@ func TestPool_Register(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pool := newTestPool()
+			pool := newTestDirectory()
 			defer pool.RemoveAll()
 
 			err := pool.Register("db", testConfig(tt.dsn))
@@ -34,7 +34,7 @@ func TestPool_Register(t *testing.T) {
 }
 
 func TestPool_Register_Duplicate(t *testing.T) {
-	pool := newTestPool()
+	pool := newTestDirectory()
 	defer pool.RemoveAll()
 
 	require.NoError(t, pool.Register("primary", testConfig(":memory:")))
@@ -44,15 +44,15 @@ func TestPool_Register_Duplicate(t *testing.T) {
 }
 
 func TestPool_Register_UnknownDriver(t *testing.T) {
-	pool := NewPool(NewDriverRegistry[*sqlx.DB]())
+	pool := NewDirectory(NewDriverRegistry[*sqlx.DB]())
 	defer pool.RemoveAll()
 
-	err := pool.Register("db", DriverConfig{Driver: "unknown", DSN: ":memory:"})
+	err := pool.Register("db", SourceConfig{Driver: "unknown", DSN: ":memory:"})
 	assert.Error(t, err)
 }
 
 func TestPool_Remove(t *testing.T) {
-	pool := newTestPool()
+	pool := newTestDirectory()
 
 	require.NoError(t, pool.Register("primary", testConfig(":memory:")))
 	require.NoError(t, pool.Remove("primary"))
@@ -62,14 +62,14 @@ func TestPool_Remove(t *testing.T) {
 }
 
 func TestPool_Remove_NotFound(t *testing.T) {
-	pool := newTestPool()
+	pool := newTestDirectory()
 
 	err := pool.Remove("nonexistent")
 	assert.Error(t, err)
 }
 
 func TestPool_RemoveAll(t *testing.T) {
-	pool := newTestPool()
+	pool := newTestDirectory()
 
 	require.NoError(t, pool.Register("primary", testConfig(":memory:")))
 	require.NoError(t, pool.Register("analytics", testConfig(":memory:")))
@@ -83,7 +83,7 @@ func TestPool_RemoveAll(t *testing.T) {
 }
 
 func TestPool_Get_AfterRemove(t *testing.T) {
-	pool := newTestPool()
+	pool := newTestDirectory()
 
 	require.NoError(t, pool.Register("primary", testConfig(":memory:")))
 	require.NoError(t, pool.Remove("primary"))

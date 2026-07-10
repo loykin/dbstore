@@ -15,7 +15,7 @@ import (
 
 type SQLiteDriver struct{}
 
-func (d *SQLiteDriver) Open(cfg dbstore.DriverConfig) (*sqlx.DB, error) {
+func (d *SQLiteDriver) Open(cfg dbstore.SourceConfig) (*sqlx.DB, error) {
 	return sqlx.Connect("sqlite", cfg.DSN)
 }
 
@@ -24,14 +24,12 @@ func (d *SQLiteDriver) ApplyPoolConfig(db *sqlx.DB, cfg dbstore.PoolConfig) {
 }
 
 func main() {
-	registry := dbstore.NewDriverRegistry[*sqlx.DB]()
-	registry.Register("sqlite", &SQLiteDriver{})
-
-	pool := dbstore.NewPool(registry)
-	defer pool.RemoveAll()
+	sql := sqlxadapter.New()
+	sql.RegisterDriver("sqlite", &SQLiteDriver{})
+	defer sql.Close()
 
 	// MaxConcurrency=1 serializes concurrent writes
-	if err := pool.Register("db", dbstore.DriverConfig{
+	if err := sql.Open("db", dbstore.SourceConfig{
 		Driver: "sqlite",
 		DSN:    "file:concurrent?mode=memory&cache=shared",
 		PoolConfig: dbstore.PoolConfig{
@@ -45,7 +43,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	executor := dbstore.NewExecutor(pool)
+	executor := sql.Executor()
 	ctx := context.Background()
 
 	if err := executor.Run(ctx, "db", func(ctx context.Context, db *sqlx.DB) error {

@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-
-	"github.com/loykin/dbstore"
 )
 
 // Client is a small REST transport client: a base URL, an HTTP client, and
@@ -20,47 +18,6 @@ type Client struct {
 	HTTPClient *http.Client
 	BaseURL    *url.URL
 	Header     http.Header
-}
-
-type Driver struct {
-	HTTPClient *http.Client
-	Header     http.Header
-}
-
-func (d Driver) Open(cfg dbstore.DriverConfig) (*Client, error) {
-	baseURL, err := url.Parse(cfg.DSN)
-	if err != nil {
-		return nil, err
-	}
-	if baseURL.Scheme == "" || baseURL.Host == "" {
-		return nil, fmt.Errorf("restadapter: DSN must be an absolute URL")
-	}
-	if !strings.HasSuffix(baseURL.Path, "/") {
-		baseURL.Path += "/"
-	}
-
-	httpClient := d.HTTPClient
-	if httpClient == nil {
-		httpClient = http.DefaultClient
-	}
-
-	return &Client{
-		HTTPClient: httpClient,
-		BaseURL:    baseURL,
-		Header:     cloneHeader(d.Header),
-	}, nil
-}
-
-type Source struct {
-	source dbstore.Source[*Client]
-}
-
-func NewSource(name string, exec *dbstore.Executor[*Client]) Source {
-	return Source{source: dbstore.NewSource(name, exec)}
-}
-
-func (s *Source) Run(ctx context.Context, fn func(context.Context, *Client) error) error {
-	return s.source.Run(ctx, fn)
 }
 
 func (c *Client) NewRequest(ctx context.Context, method, requestPath string, body io.Reader) (*http.Request, error) {

@@ -3,8 +3,10 @@ package restadapter
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -17,9 +19,32 @@ func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return fn(req)
 }
 
+type testDriver struct {
+	HTTPClient *http.Client
+	Header     http.Header
+}
+
+func (d testDriver) Open(cfg dbstore.SourceConfig) (*Client, error) {
+	baseURL, err := url.Parse(cfg.DSN)
+	if err != nil {
+		return nil, err
+	}
+	if baseURL.Scheme == "" || baseURL.Host == "" {
+		return nil, fmt.Errorf("test: DSN must be an absolute URL")
+	}
+	if !strings.HasSuffix(baseURL.Path, "/") {
+		baseURL.Path += "/"
+	}
+	return &Client{
+		HTTPClient: d.HTTPClient,
+		BaseURL:    baseURL,
+		Header:     cloneHeader(d.Header),
+	}, nil
+}
+
 func TestClient_DoJSON(t *testing.T) {
 	var gotPath string
-	driver := Driver{
+	driver := testDriver{
 		HTTPClient: &http.Client{
 			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				gotPath = req.URL.Path
@@ -45,7 +70,7 @@ func TestClient_DoJSON(t *testing.T) {
 		Header: http.Header{"X-Test": []string{"yes"}},
 	}
 
-	client, err := driver.Open(dbstore.DriverConfig{DSN: "https://example.test/api"})
+	client, err := driver.Open(dbstore.SourceConfig{DSN: "https://example.test/api"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,8 +91,8 @@ func TestClient_DoJSON(t *testing.T) {
 }
 
 func TestSource_Run(t *testing.T) {
-	registry := dbstore.NewDriverRegistry[*Client]()
-	registry.Register("rest", Driver{
+	adapter := New()
+	adapter.RegisterDriver("rest", testDriver{
 		HTTPClient: &http.Client{
 			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				return &http.Response{
@@ -80,14 +105,13 @@ func TestSource_Run(t *testing.T) {
 			}),
 		},
 	})
+	defer adapter.Close()
 
-	pool := dbstore.NewPool(registry)
-	defer pool.RemoveAll()
-	if err := pool.Register("api", dbstore.DriverConfig{Driver: "rest", DSN: "https://example.test"}); err != nil {
+	if err := adapter.Open("api", dbstore.SourceConfig{Driver: "rest", DSN: "https://example.test"}); err != nil {
 		t.Fatal(err)
 	}
 
-	source := NewSource("api", dbstore.NewExecutor(pool))
+	source := NewSource("api", adapter.Executor())
 	if err := source.Run(context.Background(), func(ctx context.Context, client *Client) error {
 		return client.DoJSON(ctx, http.MethodDelete, "/documents/1", nil, nil)
 	}); err != nil {

@@ -10,16 +10,10 @@ import (
 // Source adds SQL transaction support on top of dbstore.Source[*sqlx.DB].
 type Source struct {
 	source dbstore.Source[*sqlx.DB]
-	name   string
-	exec   *dbstore.Executor[*sqlx.DB]
 }
 
 func NewSource(name string, exec *dbstore.Executor[*sqlx.DB]) Source {
-	return Source{
-		source: dbstore.NewSource(name, exec),
-		name:   name,
-		exec:   exec,
-	}
+	return Source{source: dbstore.NewSource(name, exec)}
 }
 
 func (s *Source) Run(ctx context.Context, fn func(context.Context, *sqlx.DB) error) error {
@@ -27,7 +21,7 @@ func (s *Source) Run(ctx context.Context, fn func(context.Context, *sqlx.DB) err
 }
 
 func (s *Source) RunTx(ctx context.Context, fn func(context.Context, *sqlx.Tx) error) error {
-	return RunTx(s.exec, ctx, s.name, fn)
+	return RunTx(s.source.Executor(), ctx, s.source.Name(), fn)
 }
 
 // RunTx executes fn within a transaction against the *sqlx.DB registered under
@@ -46,12 +40,4 @@ func RunTx(exec *dbstore.Executor[*sqlx.DB], ctx context.Context, name string, f
 		}
 		return tx.Commit()
 	})
-}
-
-// ApplyPoolConfig applies dbstore.PoolConfig to a sqlx database pool.
-func ApplyPoolConfig(db *sqlx.DB, cfg dbstore.PoolConfig) {
-	db.SetMaxOpenConns(cfg.MaxOpenConns)
-	db.SetMaxIdleConns(cfg.MaxIdleConns)
-	db.SetConnMaxLifetime(cfg.MaxLifetime)
-	db.SetConnMaxIdleTime(cfg.MaxIdleTime)
 }

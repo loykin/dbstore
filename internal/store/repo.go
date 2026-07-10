@@ -13,6 +13,14 @@ func NewSource[T any](name string, exec *Executor[T]) Source[T] {
 	return Source[T]{name: name, exec: exec}
 }
 
-func (s *Source[T]) Run(ctx context.Context, fn func(context.Context, T) error) error {
+func (s Source[T]) Name() string {
+	return s.name
+}
+
+func (s Source[T]) Executor() *Executor[T] {
+	return s.exec
+}
+
+func (s Source[T]) Run(ctx context.Context, fn func(context.Context, T) error) error {
 	return s.exec.Run(ctx, s.name, fn)
 }

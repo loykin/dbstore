@@ -16,7 +16,7 @@ import (
 // TestPool_Stress_RemoveWaitsForInFlight verifies that Remove blocks until
 // all in-flight operations complete before closing the connection (P1 fix).
 func TestPool_Stress_RemoveWaitsForInFlight(t *testing.T) {
-	pool := newTestPool()
+	pool := newTestDirectory()
 
 	cfg := testConfig(":memory:")
 	cfg.PoolConfig.MaxConcurrency = 10
@@ -56,7 +56,7 @@ func TestPool_Stress_RemoveWaitsForInFlight(t *testing.T) {
 // TestPool_Stress_ConcurrentRegisterSameName verifies that only one concurrent
 // Register for the same name succeeds (double-check locking).
 func TestPool_Stress_ConcurrentRegisterSameName(t *testing.T) {
-	pool := newTestPool()
+	pool := newTestDirectory()
 	defer pool.RemoveAll()
 
 	const goroutines = 30
@@ -80,7 +80,7 @@ func TestPool_Stress_ConcurrentRegisterSameName(t *testing.T) {
 // TestExecutor_Stress_ConcurrentRun hammers the executor with many goroutines
 // and verifies no writes are lost.
 func TestExecutor_Stress_ConcurrentRun(t *testing.T) {
-	pool := newTestPool()
+	pool := newTestDirectory()
 	defer pool.RemoveAll()
 
 	cfg := testConfig("file:stress_exec?mode=memory&cache=shared")
@@ -127,7 +127,7 @@ func TestExecutor_Stress_ConcurrentRun(t *testing.T) {
 // TestExecutor_Stress_MultipleDataSources registers N datasources and fires
 // concurrent writes at all of them, verifying per-datasource row counts.
 func TestExecutor_Stress_MultipleDataSources(t *testing.T) {
-	pool := newTestPool()
+	pool := newTestDirectory()
 	defer pool.RemoveAll()
 
 	const dbCount = 5
@@ -187,7 +187,7 @@ func TestExecutor_Stress_MultipleDataSources(t *testing.T) {
 // TestExecutor_Stress_ThrottleUnderLoad verifies the per-datasource semaphore
 // correctly limits concurrency under high goroutine count.
 func TestExecutor_Stress_ThrottleUnderLoad(t *testing.T) {
-	pool := newTestPool()
+	pool := newTestDirectory()
 	defer pool.RemoveAll()
 
 	const limit = 3

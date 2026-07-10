@@ -4,7 +4,7 @@ import "fmt"
 
 // DriverBuilder opens a new client of type T from cfg.
 type DriverBuilder[T any] interface {
-	Open(cfg DriverConfig) (T, error)
+	Open(cfg SourceConfig) (T, error)
 }
 
 // PoolConfigApplier is an optional capability a DriverBuilder can implement
@@ -26,7 +26,7 @@ func (r *DriverRegistry[T]) Register(name string, b DriverBuilder[T]) {
 	r.builders[name] = b
 }
 
-func (r *DriverRegistry[T]) open(cfg DriverConfig) (T, error) {
+func (r *DriverRegistry[T]) open(cfg SourceConfig) (T, error) {
 	var zero T
 	b, ok := r.builders[cfg.Driver]
 	if !ok {

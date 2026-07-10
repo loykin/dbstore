@@ -44,7 +44,7 @@ func (r *sqliteOrderRepo) CountByUser(ctx context.Context, userID int) (int, err
 // setupMultiRepo registers two independent datasources and returns repos for each.
 func setupMultiRepo(t *testing.T) (UserRepository, OrderRepository, *Executor[*sqlx.DB]) {
 	t.Helper()
-	pool := newTestPool()
+	pool := newTestDirectory()
 	t.Cleanup(pool.RemoveAll)
 
 	require.NoError(t, pool.Register("users", testConfig("file:mr_users?mode=memory&cache=shared")))

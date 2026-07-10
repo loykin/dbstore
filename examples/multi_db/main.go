@@ -14,7 +14,7 @@ import (
 
 type SQLiteDriver struct{}
 
-func (d *SQLiteDriver) Open(cfg dbstore.DriverConfig) (*sqlx.DB, error) {
+func (d *SQLiteDriver) Open(cfg dbstore.SourceConfig) (*sqlx.DB, error) {
 	return sqlx.Connect("sqlite", cfg.DSN)
 }
 
@@ -31,14 +31,12 @@ var sqlitePoolConfig = dbstore.PoolConfig{
 }
 
 func main() {
-	registry := dbstore.NewDriverRegistry[*sqlx.DB]()
-	registry.Register("sqlite", &SQLiteDriver{})
-
-	pool := dbstore.NewPool(registry)
-	defer pool.RemoveAll()
+	sql := sqlxadapter.New()
+	sql.RegisterDriver("sqlite", &SQLiteDriver{})
+	defer sql.Close()
 
 	// meta source: configuration and user data
-	if err := pool.Register("meta", dbstore.DriverConfig{
+	if err := sql.Open("meta", dbstore.SourceConfig{
 		Driver:     "sqlite",
 		DSN:        "file:meta?mode=memory&cache=shared",
 		PoolConfig: sqlitePoolConfig,
@@ -47,7 +45,7 @@ func main() {
 	}
 
 	// stats source: events and aggregated data
-	if err := pool.Register("stats", dbstore.DriverConfig{
+	if err := sql.Open("stats", dbstore.SourceConfig{
 		Driver:     "sqlite",
 		DSN:        "file:stats?mode=memory&cache=shared",
 		PoolConfig: sqlitePoolConfig,
@@ -55,7 +53,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	executor := dbstore.NewExecutor(pool)
+	executor := sql.Executor()
 	ctx := context.Background()
 
 	// initialize meta source

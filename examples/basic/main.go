@@ -14,7 +14,7 @@ import (
 
 type SQLiteDriver struct{}
 
-func (d *SQLiteDriver) Open(cfg dbstore.DriverConfig) (*sqlx.DB, error) {
+func (d *SQLiteDriver) Open(cfg dbstore.SourceConfig) (*sqlx.DB, error) {
 	return sqlx.Connect("sqlite", cfg.DSN)
 }
 
@@ -31,13 +31,11 @@ var sqlitePoolConfig = dbstore.PoolConfig{
 }
 
 func main() {
-	registry := dbstore.NewDriverRegistry[*sqlx.DB]()
-	registry.Register("sqlite", &SQLiteDriver{})
+	sql := sqlxadapter.New()
+	sql.RegisterDriver("sqlite", &SQLiteDriver{})
+	defer sql.Close()
 
-	pool := dbstore.NewPool(registry)
-	defer pool.RemoveAll()
-
-	if err := pool.Register("main", dbstore.DriverConfig{
+	if err := sql.Open("main", dbstore.SourceConfig{
 		Driver:     "sqlite",
 		DSN:        ":memory:",
 		PoolConfig: sqlitePoolConfig,
@@ -45,7 +43,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	executor := dbstore.NewExecutor(pool)
+	executor := sql.Executor()
 	ctx := context.Background()
 
 	if err := executor.Run(ctx, "main", func(ctx context.Context, db *sqlx.DB) error {

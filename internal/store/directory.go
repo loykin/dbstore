@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-// Closer is an optional capability a pooled client may implement so Pool
+// Closer is an optional capability a registered client may implement so Directory
 // can release its resources on Remove/RemoveAll. It is checked via type
-// assertion rather than required as a type constraint on Pool[T], because
+// assertion rather than required as a type constraint on Directory[T], because
 // not every client exposes an explicit close — e.g. an HTTP-based client
 // like opensearch-go has no Close() method at all.
 type Closer interface {
@@ -22,22 +22,22 @@ func closeClient[T any](client T) error {
 	return nil
 }
 
-type Pool[T any] struct {
+type Directory[T any] struct {
 	mu      sync.Mutex
 	entries map[string]*poolEntry[T]
 	driver  *DriverRegistry[T]
 }
 
-func NewPool[T any](registry *DriverRegistry[T]) *Pool[T] {
-	return &Pool[T]{
+func NewDirectory[T any](registry *DriverRegistry[T]) *Directory[T] {
+	return &Directory[T]{
 		entries: make(map[string]*poolEntry[T]),
 		driver:  registry,
 	}
 }
 
-// Register adds a datasource by name and initializes its connection.
+// Register adds a datasource by name and initializes its client.
 // TCP connection (including Ping) is performed outside the mutex to avoid lock contention.
-func (p *Pool[T]) Register(name string, cfg DriverConfig) error {
+func (p *Directory[T]) Register(name string, cfg SourceConfig) error {
 	p.mu.Lock()
 	if _, exists := p.entries[name]; exists {
 		p.mu.Unlock()
@@ -64,9 +64,9 @@ func (p *Pool[T]) Register(name string, cfg DriverConfig) error {
 	return nil
 }
 
-// Remove unregisters a datasource and closes its connection pool.
+// Remove unregisters a datasource and closes its client when supported.
 // Waits for all in-flight operations to complete before closing.
-func (p *Pool[T]) Remove(name string) error {
+func (p *Directory[T]) Remove(name string) error {
 	p.mu.Lock()
 	entry, ok := p.entries[name]
 	if !ok {
@@ -81,7 +81,7 @@ func (p *Pool[T]) Remove(name string) error {
 }
 
 // RemoveAll removes all registered datasources; call on server shutdown.
-func (p *Pool[T]) RemoveAll() {
+func (p *Directory[T]) RemoveAll() {
 	p.mu.Lock()
 	entries := p.entries
 	p.entries = make(map[string]*poolEntry[T])
@@ -95,7 +95,7 @@ func (p *Pool[T]) RemoveAll() {
 
 // acquire returns the entry and increments the in-flight counter.
 // wg.Add(1) is called under the mutex to prevent a race with Remove.
-func (p *Pool[T]) acquire(name string) (*poolEntry[T], error) {
+func (p *Directory[T]) acquire(name string) (*poolEntry[T], error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	entry, ok := p.entries[name]
@@ -106,12 +106,12 @@ func (p *Pool[T]) acquire(name string) (*poolEntry[T], error) {
 	return entry, nil
 }
 
-func (p *Pool[T]) release(entry *poolEntry[T]) {
+func (p *Directory[T]) release(entry *poolEntry[T]) {
 	entry.wg.Done()
 }
 
 // get is for tests only — checks entry existence without incrementing wg.
-func (p *Pool[T]) get(name string) (*poolEntry[T], error) {
+func (p *Directory[T]) get(name string) (*poolEntry[T], error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	entry, ok := p.entries[name]

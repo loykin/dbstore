@@ -81,7 +81,7 @@ func (r *sqliteUserRepo) CreateBatch(ctx context.Context, names []string) error 
 // for each test and returns a fixture usable by runUserRepoComplianceSuite.
 func setupUserRepoFixture(t *testing.T) userRepoFixture {
 	t.Helper()
-	pool := newTestPool()
+	pool := newTestDirectory()
 	t.Cleanup(pool.RemoveAll)
 
 	require.NoError(t, pool.Register("primary", testConfig(":memory:")))

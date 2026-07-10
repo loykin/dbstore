@@ -7,7 +7,7 @@ storage, or other backends. It only standardizes the runtime boundary around a
 backend client:
 
 ```text
-DriverBuilder[T] -> Pool[T] -> Executor[T] -> Source[T]
+Adapter[T] -> Directory[T] -> Executor[T] -> Source[T]
 ```
 
 The application still owns its repository interfaces and backend-specific
@@ -20,6 +20,8 @@ client access.
 github.com/loykin/dbstore               core runtime
 github.com/loykin/dbstore/adapters/sqlx SQL/sqlx adapter
 github.com/loykin/dbstore/adapters/rest REST/HTTP adapter
+github.com/loykin/dbstore/adapters/opensearch OpenSearch adapter
+github.com/loykin/dbstore/adapters/elasticsearch Elasticsearch adapter
 ```
 
 The root package has no SQL or REST dependency. Backend-specific helpers live
@@ -29,26 +31,24 @@ under `adapters/`.
 
 ### Driver
 
-A driver opens one concrete client type from a `DriverConfig`.
+A driver opens one concrete client type from a `SourceConfig`.
 
 ```go
 type DriverBuilder[T any] interface {
-	Open(cfg dbstore.DriverConfig) (T, error)
+	Open(cfg dbstore.SourceConfig) (T, error)
 }
 ```
 
-### Pool
+### Adapter
 
-A pool registers named sources and owns their lifecycle.
+An adapter registers drivers, opens named sources, and owns their lifecycle.
 
 ```go
-registry := dbstore.NewDriverRegistry[*sqlx.DB]()
-registry.Register("postgres", &PostgresDriver{})
+sql := sqlxadapter.New()
+sql.RegisterDriver("postgres", &PostgresDriver{})
+defer sql.Close()
 
-pool := dbstore.NewPool(registry)
-defer pool.RemoveAll()
-
-err := pool.Register("primary", dbstore.DriverConfig{
+err := sql.Open("primary", dbstore.SourceConfig{
 	Driver:     "postgres",
 	DSN:        postgresDSN,
 	PoolConfig: dbstore.DefaultPoolConfig,
@@ -60,7 +60,7 @@ err := pool.Register("primary", dbstore.DriverConfig{
 A source is the application-facing handle used by repository implementations.
 
 ```go
-exec := dbstore.NewExecutor(pool)
+exec := sql.Executor()
 source := dbstore.NewSource("primary", exec)
 
 err := source.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
@@ -82,7 +82,7 @@ import sqlxadapter "github.com/loykin/dbstore/adapters/sqlx"
 ```go
 type PostgresDriver struct{}
 
-func (d *PostgresDriver) Open(cfg dbstore.DriverConfig) (*sqlx.DB, error) {
+func (d *PostgresDriver) Open(cfg dbstore.SourceConfig) (*sqlx.DB, error) {
 	return sqlx.Connect("postgres", cfg.DSN)
 }
 
@@ -124,18 +124,24 @@ import restadapter "github.com/loykin/dbstore/adapters/rest"
 ```
 
 ```go
-registry := dbstore.NewDriverRegistry[*restadapter.Client]()
-registry.Register("rest", restadapter.Driver{})
+type RESTDriver struct{}
 
-pool := dbstore.NewPool(registry)
-err := pool.Register("search", dbstore.DriverConfig{
+func (d RESTDriver) Open(cfg dbstore.SourceConfig) (*restadapter.Client, error) {
+	// Parse cfg.DSN and construct a backend-specific restadapter.Client.
+}
+
+rest := restadapter.New()
+rest.RegisterDriver("rest", RESTDriver{})
+
+err := rest.Open("search", dbstore.SourceConfig{
 	Driver: "rest",
 	DSN:    "http://localhost:9200",
 })
 ```
 
-OpenSearch, Elasticsearch, and other REST APIs can share this transport
-adapter. The repository owns paths, request bodies, and response semantics.
+Custom HTTP APIs can share this transport adapter. The repository owns paths,
+request bodies, and response semantics. OpenSearch and Elasticsearch have
+dedicated adapters backed by their official Go SDKs.
 
 ```go
 type documentRepo struct {
@@ -171,6 +177,30 @@ type UserRepository interface {
 Each backend implementation embeds the source that matches its client type.
 Run the same compliance suite against every implementation to catch drift.
 
+## OpenSearch And Elasticsearch
+
+OpenSearch and Elasticsearch use official SDK clients. The adapter package
+provides the default driver and keeps the common `RegisterDriver` / `Open` /
+`Executor` flow.
+
+```go
+search := opensearchadapter.New()
+search.RegisterDriver("opensearch", opensearchadapter.Driver{})
+
+err := search.Open("primary", dbstore.SourceConfig{
+	Driver: "opensearch",
+	DSN:    "http://localhost:9200",
+})
+```
+
+Repositories use the SDK client directly:
+
+```go
+type documentRepo struct {
+	opensearchadapter.Source
+}
+```
+
 ## Optional Capabilities
 
 Drivers may implement `PoolConfigApplier[T]` when a client has tunable pool or
@@ -199,7 +229,7 @@ SQLite should usually use one open connection and one concurrent operation to
 avoid write lock contention.
 
 ```go
-pool.Register("meta", dbstore.DriverConfig{
+sql.Open("meta", dbstore.SourceConfig{
 	Driver: "sqlite",
 	DSN:    "./meta.db",
 	PoolConfig: dbstore.PoolConfig{
@@ -215,10 +245,23 @@ pool.Register("meta", dbstore.DriverConfig{
 Sources can be added and removed at runtime.
 
 ```go
-pool.Register("tenant-"+id, cfg)
+sql.Open("tenant-"+id, cfg)
 repo := NewUserRepo(exec, "tenant-"+id)
 
-pool.Remove("tenant-"+id)
+// For lower-level dynamic removal, use dbstore.Directory[T] directly.
+```
+
+## Examples
+
+```text
+examples/basic             SQLite driver registration with sqlxadapter
+examples/sql_drivers       SQLite and PostgreSQL driver registration
+examples/rest              custom REST driver registration with restadapter
+examples/opensearch        OpenSearch SDK client registration
+examples/elasticsearch     Elasticsearch SDK client registration
+examples/repository        repository implementation with sqlxadapter.Source
+examples/multi_db          multiple named SQL sources
+examples/sqlite_concurrent SQLite concurrency throttling
 ```
 
 ## Layout
@@ -226,8 +269,10 @@ pool.Remove("tenant-"+id)
 ```text
 dbstore.go       public core API
 internal/store   core implementation
-adapters/sqlx    SQL/sqlx source, transactions, pool config
-adapters/rest    REST source, driver, client helpers
+adapters/sqlx    SQL/sqlx adapter, source, transactions, pool config
+adapters/rest    REST adapter, source, client helpers
+adapters/opensearch OpenSearch adapter, driver, source alias
+adapters/elasticsearch Elasticsearch adapter, driver, source alias
 examples         runnable examples
 docs             design notes
 ```

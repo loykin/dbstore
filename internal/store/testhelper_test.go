@@ -9,7 +9,7 @@ import (
 
 type sqliteDriver struct{}
 
-func (d *sqliteDriver) Open(cfg DriverConfig) (*sqlx.DB, error) {
+func (d *sqliteDriver) Open(cfg SourceConfig) (*sqlx.DB, error) {
 	return sqlx.Connect("sqlite", cfg.DSN)
 }
 
@@ -30,12 +30,12 @@ func newTestRegistry() *DriverRegistry[*sqlx.DB] {
 	return r
 }
 
-func newTestPool() *Pool[*sqlx.DB] {
-	return NewPool(newTestRegistry())
+func newTestDirectory() *Directory[*sqlx.DB] {
+	return NewDirectory(newTestRegistry())
 }
 
-func testConfig(dsn string) DriverConfig {
-	return DriverConfig{
+func testConfig(dsn string) SourceConfig {
+	return SourceConfig{
 		Driver:     "sqlite",
 		DSN:        dsn,
 		PoolConfig: DefaultPoolConfig,

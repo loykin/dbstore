@@ -98,10 +98,10 @@ func TestUserRepoCompliance_Postgres(t *testing.T) {
 	registry := NewDriverRegistry[*sqlx.DB]()
 	registry.Register("postgres", &postgresDriver{})
 
-	pool := NewPool(registry)
+	pool := NewDirectory(registry)
 	t.Cleanup(pool.RemoveAll)
 
-	require.NoError(t, pool.Register("primary", DriverConfig{
+	require.NoError(t, pool.Register("primary", SourceConfig{
 		Driver:     "postgres",
 		DSN:        dsn,
 		PoolConfig: DefaultPoolConfig,

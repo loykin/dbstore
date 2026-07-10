@@ -2,7 +2,7 @@ package store
 
 import "time"
 
-type DriverConfig struct {
+type SourceConfig struct {
 	Driver     string
 	DSN        string
 	PoolConfig PoolConfig
@@ -12,8 +12,8 @@ type DriverConfig struct {
 // throttle. MaxOpenConns/MaxIdleConns/MaxLifetime/MaxIdleTime only take
 // effect if the driver implements PoolConfigApplier[T] (see driver.go) —
 // non-SQL drivers (e.g. an HTTP-based client) typically skip that interface
-// and those four fields go unused. MaxConcurrency is the exception: Pool[T]
-// applies it directly via Throttle regardless of driver, so it's the only
+// and those four fields go unused. MaxConcurrency is the exception:
+// Directory[T] applies it directly via Throttle regardless of driver, so it's the only
 // field every backend actually respects.
 type PoolConfig struct {
 	MaxOpenConns   int

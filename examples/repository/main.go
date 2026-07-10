@@ -14,7 +14,7 @@ import (
 
 type SQLiteDriver struct{}
 
-func (d *SQLiteDriver) Open(cfg dbstore.DriverConfig) (*sqlx.DB, error) {
+func (d *SQLiteDriver) Open(cfg dbstore.SourceConfig) (*sqlx.DB, error) {
 	return sqlx.Connect("sqlite", cfg.DSN)
 }
 
@@ -90,13 +90,11 @@ func (r *sqliteUserRepo) FindAll(ctx context.Context) ([]User, error) {
 }
 
 func setupStore(ctx context.Context) (UserRepository, func(), error) {
-	registry := dbstore.NewDriverRegistry[*sqlx.DB]()
-	registry.Register("sqlite", &SQLiteDriver{})
+	sql := sqlxadapter.New()
+	sql.RegisterDriver("sqlite", &SQLiteDriver{})
+	cleanup := sql.Close
 
-	pool := dbstore.NewPool(registry)
-	cleanup := pool.RemoveAll
-
-	if err := pool.Register("primary", dbstore.DriverConfig{
+	if err := sql.Open("primary", dbstore.SourceConfig{
 		Driver:     "sqlite",
 		DSN:        "file:repository?mode=memory&cache=shared",
 		PoolConfig: sqlitePoolConfig,
@@ -105,7 +103,7 @@ func setupStore(ctx context.Context) (UserRepository, func(), error) {
 		return nil, nil, err
 	}
 
-	exec := dbstore.NewExecutor(pool)
+	exec := sql.Executor()
 	if err := exec.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error {
 		_, err := db.ExecContext(ctx, `CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)`)
 		return err

@@ -11,7 +11,7 @@ import (
 
 type sqliteDriver struct{}
 
-func (d sqliteDriver) Open(cfg dbstore.DriverConfig) (*sqlx.DB, error) {
+func (d sqliteDriver) Open(cfg dbstore.SourceConfig) (*sqlx.DB, error) {
 	return sqlx.Connect("sqlite", cfg.DSN)
 }
 
@@ -21,13 +21,11 @@ func (d sqliteDriver) ApplyPoolConfig(db *sqlx.DB, cfg dbstore.PoolConfig) {
 
 func TestSource_RunTx(t *testing.T) {
 	ctx := context.Background()
-	registry := dbstore.NewDriverRegistry[*sqlx.DB]()
-	registry.Register("sqlite", sqliteDriver{})
+	adapter := New()
+	adapter.RegisterDriver("sqlite", sqliteDriver{})
+	defer adapter.Close()
 
-	pool := dbstore.NewPool(registry)
-	defer pool.RemoveAll()
-
-	if err := pool.Register("primary", dbstore.DriverConfig{
+	if err := adapter.Open("primary", dbstore.SourceConfig{
 		Driver: "sqlite",
 		DSN:    ":memory:",
 		PoolConfig: dbstore.PoolConfig{
@@ -39,7 +37,7 @@ func TestSource_RunTx(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	exec := dbstore.NewExecutor(pool)
+	exec := adapter.Executor()
 	source := NewSource("primary", exec)
 
 	if err := source.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
@@ -69,13 +67,11 @@ func TestSource_RunTx(t *testing.T) {
 
 func TestRunTx_Rollback(t *testing.T) {
 	ctx := context.Background()
-	registry := dbstore.NewDriverRegistry[*sqlx.DB]()
-	registry.Register("sqlite", sqliteDriver{})
+	adapter := New()
+	adapter.RegisterDriver("sqlite", sqliteDriver{})
+	defer adapter.Close()
 
-	pool := dbstore.NewPool(registry)
-	defer pool.RemoveAll()
-
-	if err := pool.Register("primary", dbstore.DriverConfig{
+	if err := adapter.Open("primary", dbstore.SourceConfig{
 		Driver: "sqlite",
 		DSN:    ":memory:",
 		PoolConfig: dbstore.PoolConfig{
@@ -87,7 +83,7 @@ func TestRunTx_Rollback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	exec := dbstore.NewExecutor(pool)
+	exec := adapter.Executor()
 	if err := exec.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error {
 		_, err := db.ExecContext(ctx, `CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)`)
 		return err
