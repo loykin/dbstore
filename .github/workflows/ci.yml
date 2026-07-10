@@ -29,7 +29,7 @@ jobs:
         run: go test -race -count=1 -timeout=120s ./...
 
   integration:
-    name: Integration (Postgres + MySQL)
+    name: Integration (Postgres + MySQL + OpenSearch + Elasticsearch)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +40,7 @@ jobs:
           cache: true
 
       - name: Integration tests
-        run: go test -v -tags integration -timeout=300s ./internal/store/
+        run: go test -v -tags integration -timeout=600s ./internal/store/ ./adapters/opensearch/... ./adapters/elasticsearch/...
 
   examples:
     name: Test examples
