@@ -3,9 +3,17 @@ package store
 import "time"
 
 type SourceConfig struct {
-	Driver     string
-	DSN        string
-	PoolConfig PoolConfig
+	Driver     string     `json:"driver" yaml:"driver"`
+	DSN        string     `json:"dsn" yaml:"dsn"`
+	PoolConfig PoolConfig `json:"pool,omitempty" yaml:"pool,omitempty"`
+}
+
+// Config is a batch of named sources, typically decoded from JSON/YAML. The
+// map key is the source name — the same identifier application code passes
+// to Executor.Run — not an environment-configurable value, so it lives as
+// the map key rather than a duplicated field on SourceConfig.
+type Config struct {
+	Sources map[string]SourceConfig `json:"sources" yaml:"sources"`
 }
 
 // PoolConfig configures both the SQL connection pool and the per-datasource
@@ -16,11 +24,11 @@ type SourceConfig struct {
 // Directory[T] applies it directly via Throttle regardless of driver, so it's the only
 // field every backend actually respects.
 type PoolConfig struct {
-	MaxOpenConns   int
-	MaxIdleConns   int
-	MaxLifetime    time.Duration
-	MaxIdleTime    time.Duration
-	MaxConcurrency int
+	MaxOpenConns   int           `json:"maxOpenConns,omitempty" yaml:"maxOpenConns,omitempty"`
+	MaxIdleConns   int           `json:"maxIdleConns,omitempty" yaml:"maxIdleConns,omitempty"`
+	MaxLifetime    time.Duration `json:"maxLifetime,omitempty" yaml:"maxLifetime,omitempty"`
+	MaxIdleTime    time.Duration `json:"maxIdleTime,omitempty" yaml:"maxIdleTime,omitempty"`
+	MaxConcurrency int           `json:"maxConcurrency,omitempty" yaml:"maxConcurrency,omitempty"`
 }
 
 var DefaultPoolConfig = PoolConfig{

@@ -79,6 +79,54 @@ err := sql.Open("primary", dbstore.SourceConfig{
 })
 ```
 
+The same sources can be opened from a config-shaped struct. dbstore does not
+load JSON/YAML itself; applications load into `dbstore.Config` and pass it to
+the adapter.
+
+```go
+cfg := dbstore.Config{
+	Sources: map[string]dbstore.SourceConfig{
+		"primary": {
+			Driver: sqlxadapter.DriverPostgres,
+			DSN:    postgresDSN,
+			PoolConfig: dbstore.PoolConfig{
+				MaxOpenConns:   10,
+				MaxIdleConns:   2,
+				MaxConcurrency: 5,
+			},
+		},
+	},
+}
+
+err := sql.Configure(cfg)
+```
+
+The map key is the source name — the same identifier repository code passes
+to `Executor.Run` — not something meant to be renamed from config. Only the
+per-source connection details are meant to vary by environment.
+
+Equivalent JSON:
+
+```json
+{
+  "sources": {
+    "primary": {
+      "driver": "postgres",
+      "dsn": "postgres://user:pass@localhost/db",
+      "pool": {
+        "maxOpenConns": 10,
+        "maxIdleConns": 2,
+        "maxConcurrency": 5
+      }
+    }
+  }
+}
+```
+
+`Configure` validates and opens all sources atomically: if any source fails
+to open, sources already opened by that call are closed again before the
+error is returned.
+
 ### Source And Repository
 
 A source is the runtime handle kept by repository implementations. The

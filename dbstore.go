@@ -8,6 +8,7 @@ type (
 	Adapter[T any]           = store.Adapter[T]
 	Executor[T any]          = store.Executor[T]
 	Source[T any]            = store.Source[T]
+	Config                   = store.Config
 	SourceConfig             = store.SourceConfig
 	PoolConfig               = store.PoolConfig
 	DriverBuilder[T any]     = store.DriverBuilder[T]

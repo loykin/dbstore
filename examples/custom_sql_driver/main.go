@@ -77,15 +77,21 @@ func main() {
 	sql.RegisterDriver("tenant-sqlite", tenantSQLiteDriver{prefix: "audit"})
 	defer sql.Close()
 
-	if err := sql.Open("tenant-a", dbstore.SourceConfig{
-		Driver: "tenant-sqlite",
-		DSN:    "tenant-a",
-		PoolConfig: dbstore.PoolConfig{
-			MaxLifetime:    30 * time.Minute,
-			MaxIdleTime:    5 * time.Minute,
-			MaxConcurrency: 1,
+	cfg := dbstore.Config{
+		Sources: map[string]dbstore.SourceConfig{
+			"tenant-a": {
+				Driver: "tenant-sqlite",
+				DSN:    "tenant-a",
+				PoolConfig: dbstore.PoolConfig{
+					MaxLifetime:    30 * time.Minute,
+					MaxIdleTime:    5 * time.Minute,
+					MaxConcurrency: 1,
+				},
+			},
 		},
-	}); err != nil {
+	}
+
+	if err := sql.Configure(cfg); err != nil {
 		log.Fatal(err)
 	}
 

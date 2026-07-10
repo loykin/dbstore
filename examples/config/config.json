@@ -1,0 +1,22 @@
+{
+  "sources": {
+    "meta": {
+      "driver": "sqlite",
+      "dsn": "file:meta?mode=memory&cache=shared",
+      "pool": {
+        "maxOpenConns": 1,
+        "maxIdleConns": 1,
+        "maxConcurrency": 1
+      }
+    },
+    "stats": {
+      "driver": "sqlite",
+      "dsn": "file:stats?mode=memory&cache=shared",
+      "pool": {
+        "maxOpenConns": 1,
+        "maxIdleConns": 1,
+        "maxConcurrency": 1
+      }
+    }
+  }
+}

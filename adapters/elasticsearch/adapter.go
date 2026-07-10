@@ -22,6 +22,10 @@ func (a *Adapter) Open(name string, cfg dbstore.SourceConfig) error {
 	return a.core.Open(name, cfg)
 }
 
+func (a *Adapter) Configure(cfg dbstore.Config) error {
+	return a.core.Configure(cfg)
+}
+
 func (a *Adapter) Executor() *dbstore.Executor[*elasticsearch.Client] {
 	return a.core.Executor()
 }
