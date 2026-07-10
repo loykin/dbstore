@@ -25,9 +25,9 @@ type UserRepository interface {
 
 // sqliteUserRepo is the SQLite implementation using Source[*sqlx.DB].
 type sqliteUserRepo struct {
-	Source[*sqlx.DB]
-	source string
-	exec   *Executor[*sqlx.DB]
+	runtimeSource Source[*sqlx.DB]
+	source        string
+	exec          *Executor[*sqlx.DB]
 }
 
 func newUserRepo(exec *Executor[*sqlx.DB]) UserRepository {
@@ -36,14 +36,14 @@ func newUserRepo(exec *Executor[*sqlx.DB]) UserRepository {
 
 func newUserRepoForSource(exec *Executor[*sqlx.DB], source string) UserRepository {
 	return &sqliteUserRepo{
-		Source: NewSource(source, exec),
-		source: source,
-		exec:   exec,
+		runtimeSource: NewSource(source, exec),
+		source:        source,
+		exec:          exec,
 	}
 }
 
 func (r *sqliteUserRepo) Create(ctx context.Context, name string) error {
-	return r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
+	return r.runtimeSource.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
 		_, err := db.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, name)
 		return err
 	})
@@ -51,7 +51,7 @@ func (r *sqliteUserRepo) Create(ctx context.Context, name string) error {
 
 func (r *sqliteUserRepo) FindByID(ctx context.Context, id int) (*User, error) {
 	var u User
-	err := r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
+	err := r.runtimeSource.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
 		return db.GetContext(ctx, &u, `SELECT id, name FROM users WHERE id = ?`, id)
 	})
 	return &u, err
@@ -59,7 +59,7 @@ func (r *sqliteUserRepo) FindByID(ctx context.Context, id int) (*User, error) {
 
 func (r *sqliteUserRepo) FindAll(ctx context.Context) ([]User, error) {
 	var users []User
-	err := r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
+	err := r.runtimeSource.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
 		return db.SelectContext(ctx, &users, `SELECT id, name FROM users ORDER BY id`)
 	})
 	return users, err

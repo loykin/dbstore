@@ -18,21 +18,21 @@ import (
 // to run the same compliance suite SQLite runs against a real backend with
 // different placeholder/autoincrement semantics.
 type postgresUserRepo struct {
-	Source[*sqlx.DB]
-	source string
-	exec   *Executor[*sqlx.DB]
+	runtimeSource Source[*sqlx.DB]
+	source        string
+	exec          *Executor[*sqlx.DB]
 }
 
 func newPostgresUserRepo(exec *Executor[*sqlx.DB]) UserRepository {
 	return &postgresUserRepo{
-		Source: NewSource("primary", exec),
-		source: "primary",
-		exec:   exec,
+		runtimeSource: NewSource("primary", exec),
+		source:        "primary",
+		exec:          exec,
 	}
 }
 
 func (r *postgresUserRepo) Create(ctx context.Context, name string) error {
-	return r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
+	return r.runtimeSource.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
 		_, err := db.ExecContext(ctx, `INSERT INTO users (name) VALUES ($1)`, name)
 		return err
 	})
@@ -40,7 +40,7 @@ func (r *postgresUserRepo) Create(ctx context.Context, name string) error {
 
 func (r *postgresUserRepo) FindByID(ctx context.Context, id int) (*User, error) {
 	var u User
-	err := r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
+	err := r.runtimeSource.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
 		return db.GetContext(ctx, &u, `SELECT id, name FROM users WHERE id = $1`, id)
 	})
 	return &u, err
@@ -48,7 +48,7 @@ func (r *postgresUserRepo) FindByID(ctx context.Context, id int) (*User, error) 
 
 func (r *postgresUserRepo) FindAll(ctx context.Context) ([]User, error) {
 	var users []User
-	err := r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
+	err := r.runtimeSource.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
 		return db.SelectContext(ctx, &users, `SELECT id, name FROM users ORDER BY id`)
 	})
 	return users, err

@@ -19,15 +19,15 @@ type OrderRepository interface {
 }
 
 type sqliteOrderRepo struct {
-	Source[*sqlx.DB]
+	source Source[*sqlx.DB]
 }
 
 func newOrderRepo(exec *Executor[*sqlx.DB]) OrderRepository {
-	return &sqliteOrderRepo{NewSource("orders", exec)}
+	return &sqliteOrderRepo{source: NewSource("orders", exec)}
 }
 
 func (r *sqliteOrderRepo) Create(ctx context.Context, userID int, item string) error {
-	return r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
+	return r.source.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
 		_, err := db.ExecContext(ctx, `INSERT INTO orders (user_id, item) VALUES (?, ?)`, userID, item)
 		return err
 	})
@@ -35,7 +35,7 @@ func (r *sqliteOrderRepo) Create(ctx context.Context, userID int, item string) e
 
 func (r *sqliteOrderRepo) CountByUser(ctx context.Context, userID int) (int, error) {
 	var count int
-	err := r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
+	err := r.source.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
 		return db.QueryRowContext(ctx, `SELECT COUNT(*) FROM orders WHERE user_id = ?`, userID).Scan(&count)
 	})
 	return count, err
