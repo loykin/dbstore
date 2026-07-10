@@ -1,30 +1,35 @@
 # dbstore
 
-dbstore is a Go runtime for named backend sources.
+dbstore is a small Go runtime for named backend sources.
 
-It opens backend clients by name, manages their lifecycle, applies per-source
-concurrency limits, and gives repository implementations one consistent way to
-access the selected client.
-
-The backend client can be a SQL database, an OpenSearch client, a NATS
-connection, Redis, S3, a gRPC client, or any other type:
-
-```go
-type T = *sqlx.DB
-type T = *restadapter.Client
-type T = *nats.Conn
-```
-
-dbstore does not try to make those backends behave the same. It only
-standardizes the runtime boundary around them.
-
-## Core Model
+It does not try to hide the differences between SQL, REST, messaging, object
+storage, or other backends. It only standardizes the runtime boundary around a
+backend client:
 
 ```text
-DriverBuilder[T] -> Pool[T] -> Executor[T] -> Source[T] -> app repository
+DriverBuilder[T] -> Pool[T] -> Executor[T] -> Source[T]
 ```
 
-The lower side is a backend plugin shape:
+The application still owns its repository interfaces and backend-specific
+operations. dbstore owns source registration, lifecycle, throttling, and scoped
+client access.
+
+## Packages
+
+```text
+github.com/loykin/dbstore               core runtime
+github.com/loykin/dbstore/adapters/sqlx SQL/sqlx adapter
+github.com/loykin/dbstore/adapters/rest REST/HTTP adapter
+```
+
+The root package has no SQL or REST dependency. Backend-specific helpers live
+under `adapters/`.
+
+## Core Concepts
+
+### Driver
+
+A driver opens one concrete client type from a `DriverConfig`.
 
 ```go
 type DriverBuilder[T any] interface {
@@ -32,52 +37,47 @@ type DriverBuilder[T any] interface {
 }
 ```
 
-The upper side is a source adapter shape:
+### Pool
+
+A pool registers named sources and owns their lifecycle.
 
 ```go
-type userRepo struct {
-	dbstore.Source[*SomeClient]
-}
+registry := dbstore.NewDriverRegistry[*sqlx.DB]()
+registry.Register("postgres", &PostgresDriver{})
+
+pool := dbstore.NewPool(registry)
+defer pool.RemoveAll()
+
+err := pool.Register("primary", dbstore.DriverConfig{
+	Driver:     "postgres",
+	DSN:        postgresDSN,
+	PoolConfig: dbstore.DefaultPoolConfig,
+})
 ```
 
-`Pool[T]`, `Executor[T]`, and `Source[T]` do not know whether `T` is SQL, REST,
-messaging, object storage, or something else. They only manage:
+### Source
 
-- named source registration
-- open/remove/remove-all lifecycle
-- per-source concurrency throttling
-- scoped `Run` access
-- optional close
-- optional pool configuration
+A source is the application-facing handle used by repository implementations.
 
-Backend-specific operations stay backend-specific. SQL transactions,
-OpenSearch indexing/search, NATS publish/subscribe, and object storage uploads
-are not forced into one common operation interface.
+```go
+exec := dbstore.NewExecutor(pool)
+source := dbstore.NewSource("primary", exec)
 
-## Why
-
-Applications with multiple backend implementations of the same repository
-interface usually repeat two kinds of plumbing:
-
-1. Source lifecycle plumbing gets rewritten for each backend config.
-2. Backend implementations drift when the same repository contract is
-   implemented by more than one backend.
-
-dbstore addresses the first problem with reusable runtime primitives:
-`Pool[T]`, `Executor[T]`, and `Source[T]`.
-
-It helps with the second problem by making it easy to run one compliance test
-suite against every implementation of an application repository interface.
-
-## Installation
-
-```bash
-go get github.com/loykin/dbstore
+err := source.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
+	return db.QueryRowContext(ctx, "SELECT name FROM users WHERE id = $1", id).Scan(&name)
+})
 ```
 
-## Source Lifecycle
+`Executor.Run` is the lower-level primitive. Repository code should normally
+use `Source.Run` or an adapter source such as `sqlx.Source` or `rest.Source`.
 
-Implement a driver for the concrete client type.
+## SQL Adapter
+
+Use `adapters/sqlx` when the backend client is `*sqlx.DB`.
+
+```go
+import sqlxadapter "github.com/loykin/dbstore/adapters/sqlx"
+```
 
 ```go
 type PostgresDriver struct{}
@@ -91,87 +91,7 @@ func (d *PostgresDriver) ApplyPoolConfig(db *sqlx.DB, cfg dbstore.PoolConfig) {
 }
 ```
 
-Register the driver, then register one or more named sources.
-
-```go
-registry := dbstore.NewDriverRegistry[*sqlx.DB]()
-registry.Register("postgres", &PostgresDriver{})
-
-pool := dbstore.NewPool(registry)
-defer pool.RemoveAll()
-
-err := pool.Register("primary", dbstore.DriverConfig{
-	Driver:     "postgres",
-	DSN:        "host=localhost user=app dbname=mydb sslmode=disable",
-	PoolConfig: dbstore.DefaultPoolConfig,
-})
-```
-
-Run work against a named source.
-
-```go
-executor := dbstore.NewExecutor(pool)
-
-err := executor.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error {
-	return db.QueryRowContext(ctx, "SELECT name FROM users WHERE id = $1", id).Scan(&name)
-})
-```
-
-## Repository Source
-
-Applications define their own repository interface. dbstore only supplies the
-source adapter used by the implementation.
-
-```go
-type UserRepository interface {
-	Create(ctx context.Context, name string) error
-	FindByID(ctx context.Context, id int) (*User, error)
-}
-
-type userRepo struct {
-	dbstore.Source[*sqlx.DB]
-}
-
-func NewUserRepo(exec *dbstore.Executor[*sqlx.DB], source string) UserRepository {
-	return &userRepo{Source: dbstore.NewSource(source, exec)}
-}
-
-func (r *userRepo) Create(ctx context.Context, name string) error {
-	return r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
-		_, err := db.ExecContext(ctx, `INSERT INTO users (name) VALUES ($1)`, name)
-		return err
-	})
-}
-```
-
-The same shape works for REST clients. OpenSearch and Elasticsearch can both be
-implemented as repository logic over `restadapter.Client`; the adapter owns HTTP
-transport, while the repository owns paths and payloads.
-
-```go
-type documentRepo struct {
-	restadapter.Source
-	index string
-}
-
-func NewDocumentRepo(exec *dbstore.Executor[*restadapter.Client], source, index string) *documentRepo {
-	return &documentRepo{
-		Source: restadapter.NewSource(source, exec),
-		index:  index,
-	}
-}
-```
-
-## SQL Capability
-
-SQL transactions are a capability on top of `Source[*sqlx.DB]`, not part of the
-generic source contract.
-
-Use `sqlxadapter.Source` when a SQL repository needs `RunTx`.
-
-```go
-import sqlxadapter "github.com/loykin/dbstore/adapters/sqlx"
-```
+For repositories that need transactions, embed `sqlxadapter.Source`.
 
 ```go
 type accountRepo struct {
@@ -193,38 +113,43 @@ func (r *accountRepo) Transfer(ctx context.Context, from, to int, amount int64) 
 }
 ```
 
-`RunTx` also exists as a package-level helper in the SQL adapter package.
+`sqlxadapter.RunTx` is also available when embedding is not the right fit.
+
+## REST Adapter
+
+Use `adapters/rest` when the backend is an HTTP/JSON API.
 
 ```go
-err := sqlxadapter.RunTx(executor, ctx, "primary", func(ctx context.Context, tx *sqlx.Tx) error {
-	_, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE expired_at < now()`)
-	return err
-})
+import restadapter "github.com/loykin/dbstore/adapters/rest"
 ```
-
-There is no generic transaction API for `Executor[T]` because most backend
-clients do not have SQL transaction semantics. The root `dbstore` package does
-not import `sqlx`; SQL behavior lives in `sqlxadapter`.
-
-## REST Capability
-
-REST is a transport adapter, not an OpenSearch-specific adapter.
 
 ```go
 registry := dbstore.NewDriverRegistry[*restadapter.Client]()
 registry.Register("rest", restadapter.Driver{})
 
 pool := dbstore.NewPool(registry)
-pool.Register("search", dbstore.DriverConfig{
+err := pool.Register("search", dbstore.DriverConfig{
 	Driver: "rest",
 	DSN:    "http://localhost:9200",
 })
 ```
 
-The repository decides whether that REST source speaks OpenSearch,
-Elasticsearch, or another HTTP API.
+OpenSearch, Elasticsearch, and other REST APIs can share this transport
+adapter. The repository owns paths, request bodies, and response semantics.
 
 ```go
+type documentRepo struct {
+	restadapter.Source
+	index string
+}
+
+func NewDocumentRepo(exec *dbstore.Executor[*restadapter.Client], source, index string) *documentRepo {
+	return &documentRepo{
+		Source: restadapter.NewSource(source, exec),
+		index:  index,
+	}
+}
+
 func (r *documentRepo) Create(ctx context.Context, id, name string) error {
 	return r.Run(ctx, func(ctx context.Context, client *restadapter.Client) error {
 		return client.DoJSON(ctx, http.MethodPut, "/"+r.index+"/_create/"+id, Document{Name: name}, nil)
@@ -232,15 +157,24 @@ func (r *documentRepo) Create(ctx context.Context, id, name string) error {
 }
 ```
 
-## Other Plugin Shapes
+## Repository Contracts
 
-A non-REST backend uses the same runtime shape. For example, a NATS driver would
-open a `*nats.Conn`, and a repository would embed `dbstore.Source[*nats.Conn]`.
+dbstore does not define repository contracts. Applications do.
+
+```go
+type UserRepository interface {
+	Create(ctx context.Context, name string) error
+	FindByID(ctx context.Context, id int) (*User, error)
+}
+```
+
+Each backend implementation embeds the source that matches its client type.
+Run the same compliance suite against every implementation to catch drift.
 
 ## Optional Capabilities
 
-Drivers may implement `PoolConfigApplier[T]` if their client has tunable pool
-settings.
+Drivers may implement `PoolConfigApplier[T]` when a client has tunable pool or
+transport settings.
 
 ```go
 type PoolConfigApplier[T any] interface {
@@ -248,7 +182,7 @@ type PoolConfigApplier[T any] interface {
 }
 ```
 
-Clients may implement `Closer` if they need cleanup on `Remove` or
+Clients may implement `Closer` when they need cleanup on `Remove` or
 `RemoveAll`.
 
 ```go
@@ -257,24 +191,11 @@ type Closer interface {
 }
 ```
 
-Both are optional. HTTP-style clients often implement neither.
+Both are optional. Many HTTP clients implement neither.
 
-## SQL Pool Defaults
+## SQLite
 
-`DefaultPoolConfig` is useful for `database/sql` clients through `sqlx`. Apply
-it with `sqlxadapter.ApplyPoolConfig` from a SQL driver.
-
-```go
-var DefaultPoolConfig = PoolConfig{
-	MaxOpenConns:   10,
-	MaxIdleConns:   2,
-	MaxLifetime:    30 * time.Minute,
-	MaxIdleTime:    5 * time.Minute,
-	MaxConcurrency: 5,
-}
-```
-
-SQLite should normally use one open connection and one concurrent operation to
+SQLite should usually use one open connection and one concurrent operation to
 avoid write lock contention.
 
 ```go
@@ -300,31 +221,13 @@ repo := NewUserRepo(exec, "tenant-"+id)
 pool.Remove("tenant-"+id)
 ```
 
-## Testing Multiple Backends
-
-dbstore does not make two backend implementations equivalent. The application
-repository interface and its compliance tests do that.
-
-```go
-func RunUserRepositorySuite(t *testing.T, setup func(*testing.T) UserRepository) {
-	repo := setup(t)
-	// Create -> FindByID -> Delete assertions go here.
-}
-```
-
-Run the same suite against SQLite, Postgres, OpenSearch, or any other backend
-that claims to implement the same application repository contract.
-
-## File Structure
+## Layout
 
 ```text
-config.go    - DriverConfig, PoolConfig, DefaultPoolConfig
-driver.go    - DriverBuilder[T], PoolConfigApplier[T], DriverRegistry[T]
-throttle.go  - per-source semaphore
-entry.go     - poolEntry[T]
-pool.go      - Pool[T], registration, removal, optional close
-executor.go  - Executor[T], Run
-repo.go      - Source[T]
-adapters/sqlx - sqlx Source, RunTx, ApplyPoolConfig
-adapters/rest - REST Source, Driver, Client
+dbstore.go       public core API
+internal/store   core implementation
+adapters/sqlx    SQL/sqlx source, transactions, pool config
+adapters/rest    REST source, driver, client helpers
+examples         runnable examples
+docs             design notes
 ```

@@ -6,11 +6,9 @@ require (
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lib/pq v1.12.3
-	github.com/opensearch-project/opensearch-go/v4 v4.6.0
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.43.0
 	github.com/testcontainers/testcontainers-go/modules/mysql v0.43.0
-	github.com/testcontainers/testcontainers-go/modules/opensearch v0.43.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.43.0
 	modernc.org/sqlite v1.53.0
 )
