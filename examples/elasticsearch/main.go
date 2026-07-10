@@ -22,19 +22,19 @@ type Document struct {
 }
 
 type DocumentRepo struct {
-	elasticsearchadapter.Source
-	index string
+	source elasticsearchadapter.Source
+	index  string
 }
 
 func NewDocumentRepo(exec *dbstore.Executor[*elasticsearch.Client], source, index string) *DocumentRepo {
 	return &DocumentRepo{
-		Source: elasticsearchadapter.NewSource(source, exec),
+		source: elasticsearchadapter.NewSource(source, exec),
 		index:  index,
 	}
 }
 
 func (r *DocumentRepo) Save(ctx context.Context, id string, doc Document) error {
-	return r.Run(ctx, func(ctx context.Context, client *elasticsearch.Client) error {
+	return r.source.Run(ctx, func(ctx context.Context, client *elasticsearch.Client) error {
 		body, err := json.Marshal(doc)
 		if err != nil {
 			return err
@@ -53,7 +53,7 @@ func (r *DocumentRepo) Save(ctx context.Context, id string, doc Document) error 
 
 func (r *DocumentRepo) Find(ctx context.Context, id string) (*Document, error) {
 	var doc Document
-	err := r.Run(ctx, func(ctx context.Context, client *elasticsearch.Client) error {
+	err := r.source.Run(ctx, func(ctx context.Context, client *elasticsearch.Client) error {
 		resp, err := client.Get(r.index, id, client.Get.WithContext(ctx))
 		if err != nil {
 			return err

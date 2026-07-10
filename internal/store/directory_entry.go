@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-type poolEntry[T any] struct {
+type directoryEntry[T any] struct {
 	client    T
 	throttle  *Throttle
 	createdAt time.Time

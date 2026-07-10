@@ -39,7 +39,7 @@ func (r *DriverRegistry[T]) open(cfg SourceConfig) (T, error) {
 	// Asserted on the builder b, not the freshly-opened client: it's the
 	// builder (author of Open) that optionally knows how to tune the client
 	// it just produced, mirroring closeClient's assertion on the client
-	// itself for the opposite (teardown) capability in pool.go.
+	// itself for the opposite (teardown) capability in directory.go.
 	if applier, ok := any(b).(PoolConfigApplier[T]); ok {
 		applier.ApplyPoolConfig(client, cfg.PoolConfig)
 	}

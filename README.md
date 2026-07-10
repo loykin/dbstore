@@ -91,19 +91,19 @@ func (d *PostgresDriver) ApplyPoolConfig(db *sqlx.DB, cfg dbstore.PoolConfig) {
 }
 ```
 
-For repositories that need transactions, embed `sqlxadapter.Source`.
+For repositories that need transactions, keep a `sqlxadapter.Source` field.
 
 ```go
 type accountRepo struct {
-	sqlxadapter.Source
+	source sqlxadapter.Source
 }
 
 func NewAccountRepo(exec *dbstore.Executor[*sqlx.DB], source string) *accountRepo {
-	return &accountRepo{Source: sqlxadapter.NewSource(source, exec)}
+	return &accountRepo{source: sqlxadapter.NewSource(source, exec)}
 }
 
 func (r *accountRepo) Transfer(ctx context.Context, from, to int, amount int64) error {
-	return r.RunTx(ctx, func(ctx context.Context, tx *sqlx.Tx) error {
+	return r.source.RunTx(ctx, func(ctx context.Context, tx *sqlx.Tx) error {
 		if _, err := tx.ExecContext(ctx, `UPDATE accounts SET balance = balance - $1 WHERE id = $2`, amount, from); err != nil {
 			return err
 		}
@@ -113,7 +113,7 @@ func (r *accountRepo) Transfer(ctx context.Context, from, to int, amount int64) 
 }
 ```
 
-`sqlxadapter.RunTx` is also available when embedding is not the right fit.
+`sqlxadapter.RunTx` is also available when a source field is not the right fit.
 
 ## REST Adapter
 
@@ -145,19 +145,19 @@ dedicated adapters backed by their official Go SDKs.
 
 ```go
 type documentRepo struct {
-	restadapter.Source
+	source restadapter.Source
 	index string
 }
 
 func NewDocumentRepo(exec *dbstore.Executor[*restadapter.Client], source, index string) *documentRepo {
 	return &documentRepo{
-		Source: restadapter.NewSource(source, exec),
+		source: restadapter.NewSource(source, exec),
 		index:  index,
 	}
 }
 
 func (r *documentRepo) Create(ctx context.Context, id, name string) error {
-	return r.Run(ctx, func(ctx context.Context, client *restadapter.Client) error {
+	return r.source.Run(ctx, func(ctx context.Context, client *restadapter.Client) error {
 		return client.DoJSON(ctx, http.MethodPut, "/"+r.index+"/_create/"+id, Document{Name: name}, nil)
 	})
 }
@@ -174,7 +174,7 @@ type UserRepository interface {
 }
 ```
 
-Each backend implementation embeds the source that matches its client type.
+Each backend implementation keeps the source that matches its client type.
 Run the same compliance suite against every implementation to catch drift.
 
 ## OpenSearch And Elasticsearch
@@ -197,7 +197,7 @@ Repositories use the SDK client directly:
 
 ```go
 type documentRepo struct {
-	opensearchadapter.Source
+	source opensearchadapter.Source
 }
 ```
 
@@ -257,6 +257,7 @@ repo := NewUserRepo(exec, "tenant-"+id)
 examples/basic             SQLite driver registration with sqlxadapter
 examples/sql_drivers       SQLite and PostgreSQL driver registration
 examples/rest              custom REST driver registration with restadapter
+examples/custom_adapter    custom backend client registration with dbstore.NewAdapter[T]
 examples/opensearch        OpenSearch SDK client registration
 examples/elasticsearch     Elasticsearch SDK client registration
 examples/repository        repository implementation with sqlxadapter.Source

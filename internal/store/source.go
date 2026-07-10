@@ -2,8 +2,7 @@ package store
 
 import "context"
 
-// Source provides scoped access to a named backend client for any client
-// type T. Embed it in a concrete repository or adapter struct.
+// Source provides scoped access to a named backend client for any client type T.
 type Source[T any] struct {
 	name string
 	exec *Executor[T]

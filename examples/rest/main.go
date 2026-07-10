@@ -54,16 +54,16 @@ type User struct {
 }
 
 type UserRepo struct {
-	restadapter.Source
+	source restadapter.Source
 }
 
 func NewUserRepo(exec *dbstore.Executor[*restadapter.Client], source string) *UserRepo {
-	return &UserRepo{Source: restadapter.NewSource(source, exec)}
+	return &UserRepo{source: restadapter.NewSource(source, exec)}
 }
 
 func (r *UserRepo) Find(ctx context.Context, id string) (*User, error) {
 	var user User
-	err := r.Run(ctx, func(ctx context.Context, client *restadapter.Client) error {
+	err := r.source.Run(ctx, func(ctx context.Context, client *restadapter.Client) error {
 		return client.DoJSON(ctx, http.MethodGet, "/users/"+id, nil, &user)
 	})
 	return &user, err

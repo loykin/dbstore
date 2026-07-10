@@ -14,9 +14,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestPool_Chaos_GoroutineLeaks runs multiple register/remove/run cycles and
+// TestDirectory_Chaos_GoroutineLeaks runs multiple register/remove/run cycles and
 // verifies no goroutines are leaked. Set DBSTORE_CHAOS_TEST=1 to enable.
-func TestPool_Chaos_GoroutineLeaks(t *testing.T) {
+func TestDirectory_Chaos_GoroutineLeaks(t *testing.T) {
 	if os.Getenv("DBSTORE_CHAOS_TEST") == "" {
 		t.Skip("set DBSTORE_CHAOS_TEST=1 to enable")
 	}
@@ -77,9 +77,9 @@ func TestPool_Chaos_GoroutineLeaks(t *testing.T) {
 	assert.LessOrEqual(t, final, 10, "persistent goroutine leak after all cycles")
 }
 
-// TestPool_Chaos_MemoryStability runs sustained concurrent load and verifies
+// TestDirectory_Chaos_MemoryStability runs sustained concurrent load and verifies
 // memory usage stays bounded. Set DBSTORE_CHAOS_TEST=1 to enable.
-func TestPool_Chaos_MemoryStability(t *testing.T) {
+func TestDirectory_Chaos_MemoryStability(t *testing.T) {
 	if os.Getenv("DBSTORE_CHAOS_TEST") == "" {
 		t.Skip("set DBSTORE_CHAOS_TEST=1 to enable")
 	}

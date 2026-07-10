@@ -13,9 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestPool_Stress_RemoveWaitsForInFlight verifies that Remove blocks until
+// TestDirectory_Stress_RemoveWaitsForInFlight verifies that Remove blocks until
 // all in-flight operations complete before closing the connection (P1 fix).
-func TestPool_Stress_RemoveWaitsForInFlight(t *testing.T) {
+func TestDirectory_Stress_RemoveWaitsForInFlight(t *testing.T) {
 	pool := newTestDirectory()
 
 	cfg := testConfig(":memory:")
@@ -53,9 +53,9 @@ func TestPool_Stress_RemoveWaitsForInFlight(t *testing.T) {
 	wg.Wait()
 }
 
-// TestPool_Stress_ConcurrentRegisterSameName verifies that only one concurrent
+// TestDirectory_Stress_ConcurrentRegisterSameName verifies that only one concurrent
 // Register for the same name succeeds (double-check locking).
-func TestPool_Stress_ConcurrentRegisterSameName(t *testing.T) {
+func TestDirectory_Stress_ConcurrentRegisterSameName(t *testing.T) {
 	pool := newTestDirectory()
 	defer pool.RemoveAll()
 

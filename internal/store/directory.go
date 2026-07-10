@@ -24,13 +24,13 @@ func closeClient[T any](client T) error {
 
 type Directory[T any] struct {
 	mu      sync.Mutex
-	entries map[string]*poolEntry[T]
+	entries map[string]*directoryEntry[T]
 	driver  *DriverRegistry[T]
 }
 
 func NewDirectory[T any](registry *DriverRegistry[T]) *Directory[T] {
 	return &Directory[T]{
-		entries: make(map[string]*poolEntry[T]),
+		entries: make(map[string]*directoryEntry[T]),
 		driver:  registry,
 	}
 }
@@ -56,7 +56,7 @@ func (p *Directory[T]) Register(name string, cfg SourceConfig) error {
 		_ = closeClient(client)
 		return fmt.Errorf("dbstore: %q already registered", name)
 	}
-	p.entries[name] = &poolEntry[T]{
+	p.entries[name] = &directoryEntry[T]{
 		client:    client,
 		throttle:  newThrottle(cfg.PoolConfig.MaxConcurrency),
 		createdAt: time.Now(),
@@ -84,7 +84,7 @@ func (p *Directory[T]) Remove(name string) error {
 func (p *Directory[T]) RemoveAll() {
 	p.mu.Lock()
 	entries := p.entries
-	p.entries = make(map[string]*poolEntry[T])
+	p.entries = make(map[string]*directoryEntry[T])
 	p.mu.Unlock()
 
 	for _, entry := range entries {
@@ -95,7 +95,7 @@ func (p *Directory[T]) RemoveAll() {
 
 // acquire returns the entry and increments the in-flight counter.
 // wg.Add(1) is called under the mutex to prevent a race with Remove.
-func (p *Directory[T]) acquire(name string) (*poolEntry[T], error) {
+func (p *Directory[T]) acquire(name string) (*directoryEntry[T], error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	entry, ok := p.entries[name]
@@ -106,12 +106,12 @@ func (p *Directory[T]) acquire(name string) (*poolEntry[T], error) {
 	return entry, nil
 }
 
-func (p *Directory[T]) release(entry *poolEntry[T]) {
+func (p *Directory[T]) release(entry *directoryEntry[T]) {
 	entry.wg.Done()
 }
 
 // get is for tests only — checks entry existence without incrementing wg.
-func (p *Directory[T]) get(name string) (*poolEntry[T], error) {
+func (p *Directory[T]) get(name string) (*directoryEntry[T], error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	entry, ok := p.entries[name]

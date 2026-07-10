@@ -8,9 +8,9 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-// FuzzPool_Register verifies that arbitrary name strings never cause a panic
+// FuzzDirectory_Register verifies that arbitrary name strings never cause a panic
 // in Register or Remove, regardless of content.
-func FuzzPool_Register(f *testing.F) {
+func FuzzDirectory_Register(f *testing.F) {
 	f.Add("primary")
 	f.Add("")
 	f.Add("a b")
@@ -27,9 +27,9 @@ func FuzzPool_Register(f *testing.F) {
 	})
 }
 
-// FuzzPool_AcquireRelease verifies that acquire/release cycles with arbitrary
+// FuzzDirectory_AcquireRelease verifies that acquire/release cycles with arbitrary
 // names never panic even when the entry does not exist.
-func FuzzPool_AcquireRelease(f *testing.F) {
+func FuzzDirectory_AcquireRelease(f *testing.F) {
 	f.Add("primary", "missing")
 	f.Add("a", "a")
 	f.Add("", "")

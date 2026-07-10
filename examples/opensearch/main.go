@@ -28,21 +28,21 @@ type DocumentRepository interface {
 }
 
 type openSearchDocumentRepo struct {
-	opensearchadapter.Source
-	index string
+	source opensearchadapter.Source
+	index  string
 }
 
 var _ DocumentRepository = (*openSearchDocumentRepo)(nil)
 
 func NewDocumentRepo(exec *dbstore.Executor[*opensearchapi.Client], source, index string) DocumentRepository {
 	return &openSearchDocumentRepo{
-		Source: opensearchadapter.NewSource(source, exec),
+		source: opensearchadapter.NewSource(source, exec),
 		index:  index,
 	}
 }
 
 func (r *openSearchDocumentRepo) Create(ctx context.Context, id, name string) error {
-	return r.Run(ctx, func(ctx context.Context, client *opensearchapi.Client) error {
+	return r.source.Run(ctx, func(ctx context.Context, client *opensearchapi.Client) error {
 		body, err := json.Marshal(Document{Name: name})
 		if err != nil {
 			return err
@@ -58,7 +58,7 @@ func (r *openSearchDocumentRepo) Create(ctx context.Context, id, name string) er
 
 func (r *openSearchDocumentRepo) FindByID(ctx context.Context, id string) (*Document, error) {
 	var doc Document
-	err := r.Run(ctx, func(ctx context.Context, client *opensearchapi.Client) error {
+	err := r.source.Run(ctx, func(ctx context.Context, client *opensearchapi.Client) error {
 		resp, err := client.Document.Get(ctx, opensearchapi.DocumentGetReq{
 			Index:      r.index,
 			DocumentID: id,

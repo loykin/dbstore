@@ -46,24 +46,24 @@ type UserRepository interface {
 }
 
 type sqliteUserRepo struct {
-	sqlxadapter.Source
+	source sqlxadapter.Source
 }
 
 var _ UserRepository = (*sqliteUserRepo)(nil)
 
 func NewUserRepo(exec *dbstore.Executor[*sqlx.DB], source string) UserRepository {
-	return &sqliteUserRepo{Source: sqlxadapter.NewSource(source, exec)}
+	return &sqliteUserRepo{source: sqlxadapter.NewSource(source, exec)}
 }
 
 func (r *sqliteUserRepo) Create(ctx context.Context, name string) error {
-	return r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
+	return r.source.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
 		_, err := db.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, name)
 		return err
 	})
 }
 
 func (r *sqliteUserRepo) CreateBatch(ctx context.Context, names []string) error {
-	return r.RunTx(ctx, func(ctx context.Context, tx *sqlx.Tx) error {
+	return r.source.RunTx(ctx, func(ctx context.Context, tx *sqlx.Tx) error {
 		for _, name := range names {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, name); err != nil {
 				return err
@@ -75,7 +75,7 @@ func (r *sqliteUserRepo) CreateBatch(ctx context.Context, names []string) error 
 
 func (r *sqliteUserRepo) FindByID(ctx context.Context, id int) (*User, error) {
 	var user User
-	err := r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
+	err := r.source.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
 		return db.GetContext(ctx, &user, `SELECT id, name FROM users WHERE id = ?`, id)
 	})
 	return &user, err
@@ -83,7 +83,7 @@ func (r *sqliteUserRepo) FindByID(ctx context.Context, id int) (*User, error) {
 
 func (r *sqliteUserRepo) FindAll(ctx context.Context) ([]User, error) {
 	var users []User
-	err := r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
+	err := r.source.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
 		return db.SelectContext(ctx, &users, `SELECT id, name FROM users ORDER BY id`)
 	})
 	return users, err

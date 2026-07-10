@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPool_Register(t *testing.T) {
+func TestDirectory_Register(t *testing.T) {
 	tests := []struct {
 		name    string
 		dsn     string
@@ -33,7 +33,7 @@ func TestPool_Register(t *testing.T) {
 	}
 }
 
-func TestPool_Register_Duplicate(t *testing.T) {
+func TestDirectory_Register_Duplicate(t *testing.T) {
 	pool := newTestDirectory()
 	defer pool.RemoveAll()
 
@@ -43,7 +43,7 @@ func TestPool_Register_Duplicate(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestPool_Register_UnknownDriver(t *testing.T) {
+func TestDirectory_Register_UnknownDriver(t *testing.T) {
 	pool := NewDirectory(NewDriverRegistry[*sqlx.DB]())
 	defer pool.RemoveAll()
 
@@ -51,7 +51,7 @@ func TestPool_Register_UnknownDriver(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestPool_Remove(t *testing.T) {
+func TestDirectory_Remove(t *testing.T) {
 	pool := newTestDirectory()
 
 	require.NoError(t, pool.Register("primary", testConfig(":memory:")))
@@ -61,14 +61,14 @@ func TestPool_Remove(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestPool_Remove_NotFound(t *testing.T) {
+func TestDirectory_Remove_NotFound(t *testing.T) {
 	pool := newTestDirectory()
 
 	err := pool.Remove("nonexistent")
 	assert.Error(t, err)
 }
 
-func TestPool_RemoveAll(t *testing.T) {
+func TestDirectory_RemoveAll(t *testing.T) {
 	pool := newTestDirectory()
 
 	require.NoError(t, pool.Register("primary", testConfig(":memory:")))
@@ -82,7 +82,7 @@ func TestPool_RemoveAll(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestPool_Get_AfterRemove(t *testing.T) {
+func TestDirectory_Get_AfterRemove(t *testing.T) {
 	pool := newTestDirectory()
 
 	require.NoError(t, pool.Register("primary", testConfig(":memory:")))
