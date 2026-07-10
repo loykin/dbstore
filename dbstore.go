@@ -6,6 +6,7 @@ import "github.com/loykin/dbstore/internal/store"
 type (
 	Directory[T any]         = store.Directory[T]
 	Adapter[T any]           = store.Adapter[T]
+	AdapterContract[T any]   = store.AdapterContract[T]
 	Executor[T any]          = store.Executor[T]
 	Source[T any]            = store.Source[T]
 	Config                   = store.Config

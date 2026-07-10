@@ -9,6 +9,8 @@ type Adapter struct {
 	core *dbstore.Adapter[*sqlx.DB]
 }
 
+var _ dbstore.AdapterContract[*sqlx.DB] = (*Adapter)(nil)
+
 func New() *Adapter {
 	return &Adapter{core: dbstore.NewAdapter[*sqlx.DB]()}
 }

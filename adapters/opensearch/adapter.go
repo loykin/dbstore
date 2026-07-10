@@ -10,6 +10,8 @@ type Adapter struct {
 	core *dbstore.Adapter[*opensearchapi.Client]
 }
 
+var _ dbstore.AdapterContract[*opensearchapi.Client] = (*Adapter)(nil)
+
 func New() *Adapter {
 	return &Adapter{core: dbstore.NewAdapter[*opensearchapi.Client]()}
 }

@@ -2,10 +2,27 @@ package store
 
 import "fmt"
 
+// AdapterContract is the method set every adapter package (sqlxadapter,
+// restadapter, opensearchadapter, elasticsearchadapter, ...) is expected to
+// expose by wrapping Adapter[T]. Adapter packages compose rather than embed
+// Adapter[T] to keep unrelated core methods from leaking into their public
+// surface, which means nothing in the type system previously caught a
+// package that forgot a method or drifted on a signature — asserting
+// against this interface does.
+type AdapterContract[T any] interface {
+	RegisterDriver(name string, driver DriverBuilder[T])
+	Open(name string, cfg SourceConfig) error
+	Configure(cfg Config) error
+	Executor() *Executor[T]
+	Close()
+}
+
 type Adapter[T any] struct {
 	registry  *DriverRegistry[T]
 	directory *Directory[T]
 }
+
+var _ AdapterContract[any] = (*Adapter[any])(nil)
 
 func NewAdapter[T any]() *Adapter[T] {
 	registry := NewDriverRegistry[T]()
@@ -19,10 +36,20 @@ func (a *Adapter[T]) RegisterDriver(name string, driver DriverBuilder[T]) {
 	a.registry.Register(name, driver)
 }
 
+// Open registers and connects a single named source. name is supplied by
+// the caller, not cfg — SourceConfig has no name field, because the name is
+// a fixed identifier repository code already references (e.g. via
+// Executor.Run), not a value that should vary with environment config. For
+// opening several sources at once, see Configure, where the same name
+// lives as the map key instead of a positional argument.
 func (a *Adapter[T]) Open(name string, cfg SourceConfig) error {
 	return a.directory.Register(name, cfg)
 }
 
+// Configure is Open for every entry in cfg.Sources, keyed by name the same
+// way Open takes name as a parameter — SourceConfig itself never carries a
+// name. It is all-or-nothing: if any source fails to open, every source
+// already opened by this call is closed again before the error is returned.
 func (a *Adapter[T]) Configure(cfg Config) error {
 	if _, ok := cfg.Sources[""]; ok {
 		return fmt.Errorf("configure source: name is required")

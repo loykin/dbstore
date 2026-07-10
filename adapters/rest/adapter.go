@@ -6,6 +6,8 @@ type Adapter struct {
 	core *dbstore.Adapter[*Client]
 }
 
+var _ dbstore.AdapterContract[*Client] = (*Adapter)(nil)
+
 func New() *Adapter {
 	return &Adapter{core: dbstore.NewAdapter[*Client]()}
 }

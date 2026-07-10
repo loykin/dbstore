@@ -7,46 +7,10 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"strings"
 
 	"github.com/loykin/dbstore"
 	restadapter "github.com/loykin/dbstore/adapters/rest"
 )
-
-type RESTDriver struct {
-	HTTPClient *http.Client
-	Header     http.Header
-}
-
-func (d RESTDriver) Open(cfg dbstore.SourceConfig) (*restadapter.Client, error) {
-	baseURL, err := url.Parse(cfg.DSN)
-	if err != nil {
-		return nil, err
-	}
-	if baseURL.Scheme == "" || baseURL.Host == "" {
-		return nil, fmt.Errorf("rest dsn must be an absolute URL")
-	}
-	if !strings.HasSuffix(baseURL.Path, "/") {
-		baseURL.Path += "/"
-	}
-
-	httpClient := d.HTTPClient
-	if httpClient == nil {
-		httpClient = http.DefaultClient
-	}
-
-	header := make(http.Header, len(d.Header))
-	for key, values := range d.Header {
-		header[key] = append([]string(nil), values...)
-	}
-
-	return &restadapter.Client{
-		HTTPClient: httpClient,
-		BaseURL:    baseURL,
-		Header:     header,
-	}, nil
-}
 
 type User struct {
 	ID   string `json:"id"`
@@ -71,7 +35,7 @@ func (r *UserRepo) Find(ctx context.Context, id string) (*User, error) {
 
 func setupStore(baseURL string) (*UserRepo, func(), error) {
 	rest := restadapter.New()
-	rest.RegisterDriver("json-api", RESTDriver{
+	rest.RegisterDriver("json-api", restadapter.Driver{
 		Header: http.Header{"X-App": []string{"dbstore-example"}},
 	})
 	cleanup := rest.Close

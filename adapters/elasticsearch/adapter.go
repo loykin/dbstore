@@ -10,6 +10,8 @@ type Adapter struct {
 	core *dbstore.Adapter[*elasticsearch.Client]
 }
 
+var _ dbstore.AdapterContract[*elasticsearch.Client] = (*Adapter)(nil)
+
 func New() *Adapter {
 	return &Adapter{core: dbstore.NewAdapter[*elasticsearch.Client]()}
 }

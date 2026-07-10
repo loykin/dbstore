@@ -55,15 +55,15 @@ jobs:
 
       - name: Test basic
         working-directory: examples/basic
-        run: go test ./...
+        run: go test ./... && go run .
 
       - name: Test multi_db
         working-directory: examples/multi_db
-        run: go test ./...
+        run: go test ./... && go run .
 
       - name: Test sqlite_concurrent
         working-directory: examples/sqlite_concurrent
-        run: go test ./...
+        run: go test ./... && go run .
 
       - name: Test repository
         working-directory: examples/repository
@@ -72,6 +72,30 @@ jobs:
       - name: Test opensearch
         working-directory: examples/opensearch
         run: go test ./...
+
+      - name: Test elasticsearch
+        working-directory: examples/elasticsearch
+        run: go test ./... && go run .
+
+      - name: Test rest
+        working-directory: examples/rest
+        run: go test ./... && go run .
+
+      - name: Test sql_drivers
+        working-directory: examples/sql_drivers
+        run: go test ./... && go run .
+
+      - name: Test custom_sql_driver
+        working-directory: examples/custom_sql_driver
+        run: go test ./... && go run .
+
+      - name: Test custom_adapter
+        working-directory: examples/custom_adapter
+        run: go test ./... && go run .
+
+      - name: Test config
+        working-directory: examples/config
+        run: go test ./... && go run .
 
   lint:
     name: Lint
