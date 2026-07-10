@@ -20,6 +20,19 @@ type DriverBuilder = dbstore.DriverBuilder[*Client]
 // default covers any REST endpoint without pulling in extra dependencies.
 // HTTPClient and Header are optional overrides shared by every source
 // opened with this Driver value.
+//
+// Auth is not a Driver field because REST auth schemes vary too much to
+// unify (Basic, bearer/API key, OAuth2, request signing, mTLS, ...) — unlike
+// SQL, where credentials fit the DSN convention every database/sql driver
+// already shares. Two levels are covered instead:
+//   - Static credentials (a fixed API key or Basic Auth) go in Header —
+//     see BasicAuth for the Basic Auth case.
+//   - Auth that must be computed per request or refreshed over time (OAuth2
+//     token refresh, request signing, mTLS client certs) goes in HTTPClient:
+//     pass an *http.Client whose Transport is a custom http.RoundTripper.
+//     This is the same extension point golang.org/x/oauth2 and most cloud
+//     SDK auth helpers already target, so no dbstore-specific plumbing is
+//     needed to use them.
 type Driver struct {
 	HTTPClient *http.Client
 	Header     http.Header
