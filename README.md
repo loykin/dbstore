@@ -38,6 +38,108 @@ In other words, dbstore stops at `Source[T]`. Repository implementations keep a
 source field and translate backend-specific operations into the application's
 repository contract.
 
+## Quick Start
+
+```bash
+go get github.com/loykin/dbstore
+go get github.com/loykin/dbstore/adapters/sqlx
+```
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/jmoiron/sqlx"
+	"github.com/loykin/dbstore"
+	sqlxadapter "github.com/loykin/dbstore/adapters/sqlx"
+	_ "modernc.org/sqlite"
+)
+
+// userRepo is the application-owned repository. Embedding sqlxadapter.Source
+// gives it scoped, throttled access to whichever *sqlx.DB is registered
+// under "primary" — this is the pattern every backend implementation below
+// follows, not something Quick Start simplifies away.
+type userRepo struct {
+	sqlxadapter.Source
+}
+
+func NewUserRepo(exec *dbstore.Executor[*sqlx.DB], source string) *userRepo {
+	return &userRepo{Source: sqlxadapter.NewSource(source, exec)}
+}
+
+func (r *userRepo) Create(ctx context.Context, name string) error {
+	return r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
+		_, err := db.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, name)
+		return err
+	})
+}
+
+func (r *userRepo) FindByID(ctx context.Context, id int) (string, error) {
+	var name string
+	err := r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
+		return db.QueryRowContext(ctx, `SELECT name FROM users WHERE id = ?`, id).Scan(&name)
+	})
+	return name, err
+}
+
+func main() {
+	sql := sqlxadapter.New()
+	sql.RegisterDefaultDrivers()
+	defer sql.Close()
+
+	// MaxOpenConns: 1 matters here — sqlite's ":memory:" DSN gives every new
+	// connection its own private database, so a pool of more than one
+	// connection would make Create's write invisible to FindByID's read.
+	if err := sql.Open("primary", dbstore.SourceConfig{
+		Driver: sqlxadapter.DriverSQLite,
+		DSN:    ":memory:",
+		PoolConfig: dbstore.PoolConfig{
+			MaxOpenConns:   1,
+			MaxIdleConns:   1,
+			MaxConcurrency: 1,
+		},
+	}); err != nil {
+		log.Fatal(err)
+	}
+
+	exec := sql.Executor()
+	ctx := context.Background()
+
+	// Schema setup is not part of the repository contract, so it stays a
+	// direct Executor.Run call — the lower-level primitive Source.Run wraps.
+	if err := exec.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error {
+		_, err := db.ExecContext(ctx, `CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)`)
+		return err
+	}); err != nil {
+		log.Fatal(err)
+	}
+
+	users := NewUserRepo(exec, "primary")
+	if err := users.Create(ctx, "Alice"); err != nil {
+		log.Fatal(err)
+	}
+
+	name, err := users.FindByID(ctx, 1)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(name) // Alice
+}
+```
+
+No external database needed — `:memory:` SQLite runs this as-is (see
+`examples/basic` for the same program without the repository wrapper, and
+`examples/repository` for a fuller multi-method repository). This is the
+whole lifecycle: `RegisterDriver` picks a backend, `Open` connects a named
+source, `Executor` gets scoped access to it, and a repository embeds a
+`Source` to turn that access into application-specific methods. Everything
+below — `Config` files, transactions, REST/OpenSearch/Elasticsearch, custom
+drivers — builds on this same shape.
+
 ## Packages
 
 ```text
@@ -370,6 +472,7 @@ examples/elasticsearch     Elasticsearch SDK client registration
 examples/repository        repository implementation with sqlxadapter.Source
 examples/multi_db          multiple named SQL sources
 examples/sqlite_concurrent SQLite concurrency throttling
+examples/config            Config-driven setup spanning SQL and REST sources
 ```
 
 ## Layout
