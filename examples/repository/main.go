@@ -8,6 +8,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/loykin/dbstore"
+	sqlxadapter "github.com/loykin/dbstore/adapters/sqlx"
 	_ "modernc.org/sqlite"
 )
 
@@ -45,13 +46,13 @@ type UserRepository interface {
 }
 
 type sqliteUserRepo struct {
-	dbstore.SQLRepo
+	sqlxadapter.Source
 }
 
 var _ UserRepository = (*sqliteUserRepo)(nil)
 
 func NewUserRepo(exec *dbstore.Executor[*sqlx.DB], source string) UserRepository {
-	return &sqliteUserRepo{SQLRepo: dbstore.NewSQLRepo(source, exec)}
+	return &sqliteUserRepo{Source: sqlxadapter.NewSource(source, exec)}
 }
 
 func (r *sqliteUserRepo) Create(ctx context.Context, name string) error {

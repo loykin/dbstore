@@ -8,6 +8,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/loykin/dbstore"
+	sqlxadapter "github.com/loykin/dbstore/adapters/sqlx"
 	_ "modernc.org/sqlite"
 )
 
@@ -18,7 +19,7 @@ func (d *SQLiteDriver) Open(cfg dbstore.DriverConfig) (*sqlx.DB, error) {
 }
 
 func (d *SQLiteDriver) ApplyPoolConfig(db *sqlx.DB, cfg dbstore.PoolConfig) {
-	dbstore.DefaultApplyPoolConfig(db, cfg)
+	sqlxadapter.ApplyPoolConfig(db, cfg)
 }
 
 var sqlitePoolConfig = dbstore.PoolConfig{
@@ -26,7 +27,7 @@ var sqlitePoolConfig = dbstore.PoolConfig{
 	MaxIdleConns:   1,
 	MaxLifetime:    30 * time.Minute,
 	MaxIdleTime:    5 * time.Minute,
-	MaxConcurrency: 5,
+	MaxConcurrency: 1,
 }
 
 func main() {
@@ -36,7 +37,7 @@ func main() {
 	pool := dbstore.NewPool(registry)
 	defer pool.RemoveAll()
 
-	// meta DB — configuration and user data
+	// meta source: configuration and user data
 	if err := pool.Register("meta", dbstore.DriverConfig{
 		Driver:     "sqlite",
 		DSN:        "file:meta?mode=memory&cache=shared",
@@ -45,7 +46,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// stats DB — events and aggregated data
+	// stats source: events and aggregated data
 	if err := pool.Register("stats", dbstore.DriverConfig{
 		Driver:     "sqlite",
 		DSN:        "file:stats?mode=memory&cache=shared",
@@ -57,38 +58,54 @@ func main() {
 	executor := dbstore.NewExecutor(pool)
 	ctx := context.Background()
 
-	// initialize meta DB
-	executor.Run(ctx, "meta", func(ctx context.Context, db *sqlx.DB) error {
+	// initialize meta source
+	if err := executor.Run(ctx, "meta", func(ctx context.Context, db *sqlx.DB) error {
 		_, err := db.ExecContext(ctx, `CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)`)
 		return err
-	})
-	executor.Run(ctx, "meta", func(ctx context.Context, db *sqlx.DB) error {
+	}); err != nil {
+		log.Fatal(err)
+	}
+	if err := executor.Run(ctx, "meta", func(ctx context.Context, db *sqlx.DB) error {
 		_, err := db.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, "Alice")
 		return err
-	})
+	}); err != nil {
+		log.Fatal(err)
+	}
 
-	// initialize stats DB
-	executor.Run(ctx, "stats", func(ctx context.Context, db *sqlx.DB) error {
+	// initialize stats source
+	if err := executor.Run(ctx, "stats", func(ctx context.Context, db *sqlx.DB) error {
 		_, err := db.ExecContext(ctx, `CREATE TABLE events (id INTEGER PRIMARY KEY, type TEXT, count INTEGER)`)
 		return err
-	})
-	executor.Run(ctx, "stats", func(ctx context.Context, db *sqlx.DB) error {
+	}); err != nil {
+		log.Fatal(err)
+	}
+	if err := executor.Run(ctx, "stats", func(ctx context.Context, db *sqlx.DB) error {
 		_, err := db.ExecContext(ctx, `INSERT INTO events (type, count) VALUES (?, ?)`, "login", 42)
 		return err
-	})
+	}); err != nil {
+		log.Fatal(err)
+	}
 
-	// query each DB independently
-	executor.Run(ctx, "meta", func(ctx context.Context, db *sqlx.DB) error {
+	// query each source independently
+	if err := executor.Run(ctx, "meta", func(ctx context.Context, db *sqlx.DB) error {
 		var name string
-		db.QueryRowContext(ctx, `SELECT name FROM users WHERE id = 1`).Scan(&name)
+		if err := db.QueryRowContext(ctx, `SELECT name FROM users WHERE id = 1`).Scan(&name); err != nil {
+			return err
+		}
 		fmt.Println("[meta] user:", name)
 		return nil
-	})
+	}); err != nil {
+		log.Fatal(err)
+	}
 
-	executor.Run(ctx, "stats", func(ctx context.Context, db *sqlx.DB) error {
+	if err := executor.Run(ctx, "stats", func(ctx context.Context, db *sqlx.DB) error {
 		var count int
-		db.QueryRowContext(ctx, `SELECT count FROM events WHERE type = 'login'`).Scan(&count)
+		if err := db.QueryRowContext(ctx, `SELECT count FROM events WHERE type = 'login'`).Scan(&count); err != nil {
+			return err
+		}
 		fmt.Println("[stats] login count:", count)
 		return nil
-	})
+	}); err != nil {
+		log.Fatal(err)
+	}
 }

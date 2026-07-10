@@ -23,13 +23,23 @@ type UserRepository interface {
 	CreateBatch(ctx context.Context, names []string) error
 }
 
-// sqliteUserRepo is the SQLite implementation using SQLRepo.
+// sqliteUserRepo is the SQLite implementation using Source[*sqlx.DB].
 type sqliteUserRepo struct {
-	SQLRepo
+	Source[*sqlx.DB]
+	source string
+	exec   *Executor[*sqlx.DB]
 }
 
 func newUserRepo(exec *Executor[*sqlx.DB]) UserRepository {
-	return &sqliteUserRepo{NewSQLRepo("primary", exec)}
+	return newUserRepoForSource(exec, "primary")
+}
+
+func newUserRepoForSource(exec *Executor[*sqlx.DB], source string) UserRepository {
+	return &sqliteUserRepo{
+		Source: NewSource(source, exec),
+		source: source,
+		exec:   exec,
+	}
 }
 
 func (r *sqliteUserRepo) Create(ctx context.Context, name string) error {
@@ -57,7 +67,7 @@ func (r *sqliteUserRepo) FindAll(ctx context.Context) ([]User, error) {
 
 // CreateBatch creates multiple users in a single transaction.
 func (r *sqliteUserRepo) CreateBatch(ctx context.Context, names []string) error {
-	return r.RunTx(ctx, func(ctx context.Context, tx *sqlx.Tx) error {
+	return runSQLTx(r.exec, ctx, r.source, func(ctx context.Context, tx *sqlx.Tx) error {
 		for _, name := range names {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, name); err != nil {
 				return err

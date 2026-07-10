@@ -9,6 +9,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/loykin/dbstore"
+	sqlxadapter "github.com/loykin/dbstore/adapters/sqlx"
 	_ "modernc.org/sqlite"
 )
 
@@ -19,7 +20,7 @@ func (d *SQLiteDriver) Open(cfg dbstore.DriverConfig) (*sqlx.DB, error) {
 }
 
 func (d *SQLiteDriver) ApplyPoolConfig(db *sqlx.DB, cfg dbstore.PoolConfig) {
-	dbstore.DefaultApplyPoolConfig(db, cfg)
+	sqlxadapter.ApplyPoolConfig(db, cfg)
 }
 
 func main() {
@@ -47,30 +48,43 @@ func main() {
 	executor := dbstore.NewExecutor(pool)
 	ctx := context.Background()
 
-	executor.Run(ctx, "db", func(ctx context.Context, db *sqlx.DB) error {
+	if err := executor.Run(ctx, "db", func(ctx context.Context, db *sqlx.DB) error {
 		_, err := db.ExecContext(ctx, `CREATE TABLE log (id INTEGER PRIMARY KEY, msg TEXT)`)
 		return err
-	})
+	}); err != nil {
+		log.Fatal(err)
+	}
 
 	// 10 goroutines write concurrently — MaxConcurrency=1 serializes them
 	var wg sync.WaitGroup
+	errs := make(chan error, 10)
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		i := i
 		go func() {
 			defer wg.Done()
-			executor.Run(ctx, "db", func(ctx context.Context, db *sqlx.DB) error {
+			errs <- executor.Run(ctx, "db", func(ctx context.Context, db *sqlx.DB) error {
 				_, err := db.ExecContext(ctx, `INSERT INTO log (msg) VALUES (?)`, fmt.Sprintf("goroutine-%d", i))
 				return err
 			})
 		}()
 	}
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
 
-	executor.Run(ctx, "db", func(ctx context.Context, db *sqlx.DB) error {
+	if err := executor.Run(ctx, "db", func(ctx context.Context, db *sqlx.DB) error {
 		var count int
-		db.QueryRowContext(ctx, `SELECT COUNT(*) FROM log`).Scan(&count)
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM log`).Scan(&count); err != nil {
+			return err
+		}
 		fmt.Println("inserted:", count, "rows")
 		return nil
-	})
+	}); err != nil {
+		log.Fatal(err)
+	}
 }

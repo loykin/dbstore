@@ -123,7 +123,7 @@ func TestExecutor_Run_Query(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestExecutor_RunTx_Commit(t *testing.T) {
+func TestExecutor_SQLWorkCanUseTransactionInsideRun(t *testing.T) {
 	pool := newTestPool()
 	defer pool.RemoveAll()
 
@@ -136,7 +136,7 @@ func TestExecutor_RunTx_Commit(t *testing.T) {
 		return err
 	})
 
-	err := RunTx(executor, ctx, "primary", func(ctx context.Context, tx *sqlx.Tx) error {
+	err := runSQLTx(executor, ctx, "primary", func(ctx context.Context, tx *sqlx.Tx) error {
 		_, err := tx.ExecContext(ctx, `INSERT INTO t (val) VALUES (?)`, "tx-value")
 		return err
 	})
@@ -151,7 +151,7 @@ func TestExecutor_RunTx_Commit(t *testing.T) {
 	})
 }
 
-func TestExecutor_RunTx_Rollback(t *testing.T) {
+func TestExecutor_SQLTransactionRollbackInsideRun(t *testing.T) {
 	pool := newTestPool()
 	defer pool.RemoveAll()
 
@@ -164,7 +164,7 @@ func TestExecutor_RunTx_Rollback(t *testing.T) {
 		return err
 	})
 
-	err := RunTx(executor, ctx, "primary", func(ctx context.Context, tx *sqlx.Tx) error {
+	err := runSQLTx(executor, ctx, "primary", func(ctx context.Context, tx *sqlx.Tx) error {
 		_, _ = tx.ExecContext(ctx, `INSERT INTO t (val) VALUES (?)`, "should-rollback")
 		return errors.New("intentional error")
 	})

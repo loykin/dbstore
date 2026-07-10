@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,17 +11,8 @@ import (
 	"sync"
 
 	"github.com/loykin/dbstore"
-	"github.com/opensearch-project/opensearch-go/v4"
-	"github.com/opensearch-project/opensearch-go/v4/opensearchapi"
+	restadapter "github.com/loykin/dbstore/adapters/rest"
 )
-
-type OpenSearchDriver struct{}
-
-func (d *OpenSearchDriver) Open(cfg dbstore.DriverConfig) (*opensearchapi.Client, error) {
-	return opensearchapi.NewClient(opensearchapi.Config{
-		Client: opensearch.Config{Addresses: []string{cfg.DSN}},
-	})
-}
 
 type Document struct {
 	ID   string `json:"-"`
@@ -35,42 +25,33 @@ type DocumentRepository interface {
 }
 
 type openSearchDocumentRepo struct {
-	dbstore.BaseRepo[*opensearchapi.Client]
+	restadapter.Source
 	index string
 }
 
 var _ DocumentRepository = (*openSearchDocumentRepo)(nil)
 
-func NewDocumentRepo(exec *dbstore.Executor[*opensearchapi.Client], source, index string) DocumentRepository {
+func NewDocumentRepo(exec *dbstore.Executor[*restadapter.Client], source, index string) DocumentRepository {
 	return &openSearchDocumentRepo{
-		BaseRepo: dbstore.NewBaseRepo(source, exec),
-		index:    index,
+		Source: restadapter.NewSource(source, exec),
+		index:  index,
 	}
 }
 
 func (r *openSearchDocumentRepo) Create(ctx context.Context, id, name string) error {
-	return r.Run(ctx, func(ctx context.Context, client *opensearchapi.Client) error {
-		body, err := json.Marshal(Document{Name: name})
-		if err != nil {
-			return err
-		}
-		_, err = client.Document.Create(ctx, opensearchapi.DocumentCreateReq{
-			Index:      r.index,
-			DocumentID: id,
-			Body:       bytes.NewReader(body),
-		})
-		return err
+	return r.Run(ctx, func(ctx context.Context, client *restadapter.Client) error {
+		return client.DoJSON(ctx, http.MethodPut, "/"+r.index+"/_create/"+id, Document{Name: name}, nil)
 	})
 }
 
 func (r *openSearchDocumentRepo) FindByID(ctx context.Context, id string) (*Document, error) {
 	var doc Document
-	err := r.Run(ctx, func(ctx context.Context, client *opensearchapi.Client) error {
-		resp, err := client.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      r.index,
-			DocumentID: id,
-		})
-		if err != nil {
+	err := r.Run(ctx, func(ctx context.Context, client *restadapter.Client) error {
+		var resp struct {
+			Found  bool            `json:"found"`
+			Source json.RawMessage `json:"_source"`
+		}
+		if err := client.DoJSON(ctx, http.MethodGet, "/"+r.index+"/_doc/"+id, nil, &resp); err != nil {
 			return err
 		}
 		if !resp.Found {
@@ -83,14 +64,14 @@ func (r *openSearchDocumentRepo) FindByID(ctx context.Context, id string) (*Docu
 }
 
 func setupStore(address string) (DocumentRepository, func(), error) {
-	registry := dbstore.NewDriverRegistry[*opensearchapi.Client]()
-	registry.Register("opensearch", &OpenSearchDriver{})
+	registry := dbstore.NewDriverRegistry[*restadapter.Client]()
+	registry.Register("rest", restadapter.Driver{})
 
 	pool := dbstore.NewPool(registry)
 	cleanup := pool.RemoveAll
 
 	if err := pool.Register("search", dbstore.DriverConfig{
-		Driver: "opensearch",
+		Driver: "rest",
 		DSN:    address,
 	}); err != nil {
 		cleanup()

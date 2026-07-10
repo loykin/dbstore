@@ -1,6 +1,8 @@
 package store
 
 import (
+	"context"
+
 	"github.com/jmoiron/sqlx"
 	_ "modernc.org/sqlite"
 )
@@ -12,6 +14,10 @@ func (d *sqliteDriver) Open(cfg DriverConfig) (*sqlx.DB, error) {
 }
 
 func (d *sqliteDriver) ApplyPoolConfig(db *sqlx.DB, cfg PoolConfig) {
+	applySQLPoolConfig(db, cfg)
+}
+
+func applySQLPoolConfig(db *sqlx.DB, cfg PoolConfig) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxIdleTime(cfg.MaxIdleTime)
@@ -34,4 +40,19 @@ func testConfig(dsn string) DriverConfig {
 		DSN:        dsn,
 		PoolConfig: DefaultPoolConfig,
 	}
+}
+
+func runSQLTx(exec *Executor[*sqlx.DB], ctx context.Context, name string, fn func(context.Context, *sqlx.Tx) error) error {
+	return exec.Run(ctx, name, func(ctx context.Context, db *sqlx.DB) error {
+		tx, err := db.BeginTxx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+
+		if err := fn(ctx, tx); err != nil {
+			return err
+		}
+		return tx.Commit()
+	})
 }

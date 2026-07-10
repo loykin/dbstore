@@ -28,7 +28,7 @@ func (d *postgresDriver) Open(cfg DriverConfig) (*sqlx.DB, error) {
 }
 
 func (d *postgresDriver) ApplyPoolConfig(db *sqlx.DB, cfg PoolConfig) {
-	DefaultApplyPoolConfig(db, cfg)
+	applySQLPoolConfig(db, cfg)
 }
 
 type mysqlDriver struct{}
@@ -38,7 +38,7 @@ func (d *mysqlDriver) Open(cfg DriverConfig) (*sqlx.DB, error) {
 }
 
 func (d *mysqlDriver) ApplyPoolConfig(db *sqlx.DB, cfg PoolConfig) {
-	DefaultApplyPoolConfig(db, cfg)
+	applySQLPoolConfig(db, cfg)
 }
 
 // --- shared suite ---
@@ -78,7 +78,7 @@ func containerSuite(t *testing.T, exec *Executor[*sqlx.DB], source, ph string) {
 	})
 
 	t.Run("Transaction_Commit", func(t *testing.T) {
-		require.NoError(t, RunTx(exec, ctx, source, func(ctx context.Context, tx *sqlx.Tx) error {
+		require.NoError(t, runSQLTx(exec, ctx, source, func(ctx context.Context, tx *sqlx.Tx) error {
 			_, err := tx.ExecContext(ctx, `INSERT INTO cs_users (name) VALUES (`+p(1)+`)`, "Bob")
 			return err
 		}))
@@ -96,7 +96,7 @@ func containerSuite(t *testing.T, exec *Executor[*sqlx.DB], source, ph string) {
 			return db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cs_users`).Scan(&before)
 		})
 
-		err := RunTx(exec, ctx, source, func(ctx context.Context, tx *sqlx.Tx) error {
+		err := runSQLTx(exec, ctx, source, func(ctx context.Context, tx *sqlx.Tx) error {
 			_, _ = tx.ExecContext(ctx, `INSERT INTO cs_users (name) VALUES (`+p(1)+`)`, "ShouldRollback")
 			return fmt.Errorf("intentional")
 		})

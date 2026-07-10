@@ -1,10 +1,6 @@
 package store
 
-import (
-	"fmt"
-
-	"github.com/jmoiron/sqlx"
-)
+import "fmt"
 
 // DriverBuilder opens a new client of type T from cfg.
 type DriverBuilder[T any] interface {
@@ -12,21 +8,10 @@ type DriverBuilder[T any] interface {
 }
 
 // PoolConfigApplier is an optional capability a DriverBuilder can implement
-// to tune pool settings right after Open. It is kept separate from
-// DriverBuilder (not a required method) because most PoolConfig fields
-// (MaxOpenConns, MaxIdleConns, ...) are specific to database/sql connection
-// pools and have no equivalent for non-SQL clients.
+// to tune client settings right after Open. It is kept separate from
+// DriverBuilder because not every backend client has pool settings.
 type PoolConfigApplier[T any] interface {
 	ApplyPoolConfig(client T, cfg PoolConfig)
-}
-
-// DefaultApplyPoolConfig applies the standard pool configuration to db.
-// Driver implementations can call this to reuse the default settings.
-func DefaultApplyPoolConfig(db *sqlx.DB, cfg PoolConfig) {
-	db.SetMaxOpenConns(cfg.MaxOpenConns)
-	db.SetMaxIdleConns(cfg.MaxIdleConns)
-	db.SetConnMaxLifetime(cfg.MaxLifetime)
-	db.SetConnMaxIdleTime(cfg.MaxIdleTime)
 }
 
 type DriverRegistry[T any] struct {

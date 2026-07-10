@@ -8,6 +8,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/loykin/dbstore"
+	sqlxadapter "github.com/loykin/dbstore/adapters/sqlx"
 	_ "modernc.org/sqlite"
 )
 
@@ -18,7 +19,7 @@ func (d *SQLiteDriver) Open(cfg dbstore.DriverConfig) (*sqlx.DB, error) {
 }
 
 func (d *SQLiteDriver) ApplyPoolConfig(db *sqlx.DB, cfg dbstore.PoolConfig) {
-	dbstore.DefaultApplyPoolConfig(db, cfg)
+	sqlxadapter.ApplyPoolConfig(db, cfg)
 }
 
 var sqlitePoolConfig = dbstore.PoolConfig{
@@ -26,7 +27,7 @@ var sqlitePoolConfig = dbstore.PoolConfig{
 	MaxIdleConns:   1,
 	MaxLifetime:    30 * time.Minute,
 	MaxIdleTime:    5 * time.Minute,
-	MaxConcurrency: 5,
+	MaxConcurrency: 1,
 }
 
 func main() {

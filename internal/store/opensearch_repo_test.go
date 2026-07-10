@@ -1,7 +1,7 @@
 //go:build integration
 
 // This file finishes what opensearch_research_test.go started: it
-// instantiates the actual generic Pool[T]/Executor[T]/BaseRepo[T] from
+// instantiates the actual generic Pool[T]/Executor[T]/Source[T] from
 // pool.go/executor.go/repo.go with T = *opensearchapi.Client, end to end,
 // against a real OpenSearch container.
 package store
@@ -67,12 +67,12 @@ func startOpenSearchContainer(t *testing.T) string {
 }
 
 type openSearchDocRepo struct {
-	BaseRepo[*opensearchapi.Client]
+	Source[*opensearchapi.Client]
 	index string
 }
 
 func newOpenSearchDocRepo(exec *Executor[*opensearchapi.Client], index string) DocRepository {
-	return &openSearchDocRepo{BaseRepo: NewBaseRepo("primary", exec), index: index}
+	return &openSearchDocRepo{Source: NewSource("primary", exec), index: index}
 }
 
 func (r *openSearchDocRepo) Create(ctx context.Context, id, name string) error {
@@ -107,7 +107,7 @@ func (r *openSearchDocRepo) FindByID(ctx context.Context, id string) (*Doc, erro
 }
 
 // TestOpenSearchRepo_Pool_Lifecycle_And_DocumentRoundTrip proves the
-// Pool[T]/Executor[T]/BaseRepo[T] generics work unmodified for a real
+// Pool[T]/Executor[T]/Source[T] generics work unmodified for a real
 // non-SQL client: Register/Run/RemoveAll all behave correctly with
 // T = *opensearchapi.Client, even though that client implements neither
 // Closer nor PoolConfigApplier — both are optional capabilities, so their

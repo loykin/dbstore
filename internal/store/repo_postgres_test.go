@@ -18,11 +18,17 @@ import (
 // to run the same compliance suite SQLite runs against a real backend with
 // different placeholder/autoincrement semantics.
 type postgresUserRepo struct {
-	SQLRepo
+	Source[*sqlx.DB]
+	source string
+	exec   *Executor[*sqlx.DB]
 }
 
 func newPostgresUserRepo(exec *Executor[*sqlx.DB]) UserRepository {
-	return &postgresUserRepo{NewSQLRepo("primary", exec)}
+	return &postgresUserRepo{
+		Source: NewSource("primary", exec),
+		source: "primary",
+		exec:   exec,
+	}
 }
 
 func (r *postgresUserRepo) Create(ctx context.Context, name string) error {
@@ -49,7 +55,7 @@ func (r *postgresUserRepo) FindAll(ctx context.Context) ([]User, error) {
 }
 
 func (r *postgresUserRepo) CreateBatch(ctx context.Context, names []string) error {
-	return r.RunTx(ctx, func(ctx context.Context, tx *sqlx.Tx) error {
+	return runSQLTx(r.exec, ctx, r.source, func(ctx context.Context, tx *sqlx.Tx) error {
 		for _, name := range names {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO users (name) VALUES ($1)`, name); err != nil {
 				return err

@@ -34,7 +34,7 @@ func TestOpenSearch_ClientDoesNotImplementCloser(t *testing.T) {
 // half of the design note's concern: operation shape. There is no
 // BeginTxx/Commit/Rollback equivalent — Create/FindByID go through
 // openSearchDocRepo (opensearch_repo_test.go), the same generic
-// Pool[T]/Executor[T]/BaseRepo[T] stack real callers would use, rather than
+// Pool[T]/Executor[T]/Source[T] stack real callers would use, rather than
 // a second hand-rolled client, so this test can't silently drift from what
 // DocRepository actually does.
 func TestOpenSearch_DocumentRoundTrip_And_NoTransactions(t *testing.T) {

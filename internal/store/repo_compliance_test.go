@@ -71,7 +71,7 @@ func runUserRepoComplianceSuite(t *testing.T, setup func(t *testing.T) userRepoF
 
 	t.Run("CreateBatch_Rollback", func(t *testing.T) {
 		f := setup(t)
-		err := RunTx(f.exec, ctx, f.source, func(ctx context.Context, tx *sqlx.Tx) error {
+		err := runSQLTx(f.exec, ctx, f.source, func(ctx context.Context, tx *sqlx.Tx) error {
 			_, _ = tx.ExecContext(ctx, `INSERT INTO users (name) VALUES (`+f.ph(1)+`)`, "ShouldRollback")
 			return errors.New("intentional")
 		})

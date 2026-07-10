@@ -19,11 +19,11 @@ type OrderRepository interface {
 }
 
 type sqliteOrderRepo struct {
-	BaseRepo[*sqlx.DB]
+	Source[*sqlx.DB]
 }
 
 func newOrderRepo(exec *Executor[*sqlx.DB]) OrderRepository {
-	return &sqliteOrderRepo{NewBaseRepo("orders", exec)}
+	return &sqliteOrderRepo{NewSource("orders", exec)}
 }
 
 func (r *sqliteOrderRepo) Create(ctx context.Context, userID int, item string) error {
@@ -62,7 +62,7 @@ func setupMultiRepo(t *testing.T) (UserRepository, OrderRepository, *Executor[*s
 		return err
 	}))
 
-	users := &sqliteUserRepo{NewSQLRepo("users", exec)}
+	users := newUserRepoForSource(exec, "users")
 	orders := newOrderRepo(exec)
 	return users, orders, exec
 }
@@ -131,8 +131,7 @@ func TestMultiRepo_RollbackOnOneSourceDoesNotAffectOther(t *testing.T) {
 
 	require.NoError(t, orders.Create(ctx, 99, "committed"))
 
-	concrete := &sqliteUserRepo{NewSQLRepo("users", exec)}
-	err := concrete.RunTx(ctx, func(ctx context.Context, tx *sqlx.Tx) error {
+	err := runSQLTx(exec, ctx, "users", func(ctx context.Context, tx *sqlx.Tx) error {
 		_, _ = tx.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, "should-rollback")
 		return errors.New("intentional")
 	})
@@ -161,14 +160,14 @@ func TestMultiRepo_TransactionAcrossReposIsIndependent(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		errs[0] = RunTx(exec, ctx, "users", func(ctx context.Context, tx *sqlx.Tx) error {
+		errs[0] = runSQLTx(exec, ctx, "users", func(ctx context.Context, tx *sqlx.Tx) error {
 			_, err := tx.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, "tx-user")
 			return err
 		})
 	}()
 	go func() {
 		defer wg.Done()
-		errs[1] = RunTx(exec, ctx, "orders", func(ctx context.Context, tx *sqlx.Tx) error {
+		errs[1] = runSQLTx(exec, ctx, "orders", func(ctx context.Context, tx *sqlx.Tx) error {
 			_, err := tx.ExecContext(ctx, `INSERT INTO orders (user_id, item) VALUES (?, ?)`, 1, "tx-item")
 			return err
 		})
