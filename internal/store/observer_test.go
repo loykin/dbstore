@@ -86,6 +86,26 @@ func (panicOnRegisterObserver) ObserveSourceRemoved(string)                  {}
 func (panicOnRegisterObserver) ObserveAcquire(string, time.Duration, error)  {}
 func (panicOnRegisterObserver) ObserveComplete(string, time.Duration, error) {}
 
+type panicOnAcquireObserver struct{}
+
+func (panicOnAcquireObserver) ObserveSourceSnapshot([]string) {}
+func (panicOnAcquireObserver) ObserveSourceRegistered(string) {}
+func (panicOnAcquireObserver) ObserveSourceRemoved(string)    {}
+func (panicOnAcquireObserver) ObserveAcquire(string, time.Duration, error) {
+	panic("acquire-boom")
+}
+func (panicOnAcquireObserver) ObserveComplete(string, time.Duration, error) {}
+
+type panicOnCompleteObserver struct{}
+
+func (panicOnCompleteObserver) ObserveSourceSnapshot([]string)              {}
+func (panicOnCompleteObserver) ObserveSourceRegistered(string)              {}
+func (panicOnCompleteObserver) ObserveSourceRemoved(string)                 {}
+func (panicOnCompleteObserver) ObserveAcquire(string, time.Duration, error) {}
+func (panicOnCompleteObserver) ObserveComplete(string, time.Duration, error) {
+	panic("complete-boom")
+}
+
 func TestDirectory_NotifiesObserverOnRegisterAndRemove(t *testing.T) {
 	obs := &fakeObserver{}
 	pool := newTestDirectory()
@@ -239,20 +259,30 @@ func TestDirectory_ObserverCallbacksOrderedWithDataMutations(t *testing.T) {
 		"the snapshot that linearized first must also be delivered first")
 }
 
-// TestDirectory_ObserverMuReleasedEvenIfCallbackPanics is the regression
-// test for review's finding: observerMu was released only on the normal
-// path, so a panicking Observer left it locked forever, hanging every
-// future SetObserver/Register/Remove/RemoveAll call — a deadlock made
-// harder to diagnose by mu already being free by that point.
-func TestDirectory_ObserverMuReleasedEvenIfCallbackPanics(t *testing.T) {
+// TestDirectory_ObserverPanicDoesNotCrashOrDeadlockRegister covers two
+// review findings together: (1) an Observer callback used to leave
+// observerMu locked forever if it panicked, hanging every future
+// SetObserver/Register/Remove/RemoveAll call; (2) even after that was fixed
+// with a bare defer, the panic itself still propagated out of Register,
+// which is its own bug — a bug in a metrics/logging Observer must not make
+// a successful Register call look like it failed. safeObserve now recovers
+// the panic, so Register returns normally (the source really is registered)
+// and observerMu isn't left locked.
+func TestDirectory_ObserverPanicDoesNotCrashOrDeadlockRegister(t *testing.T) {
 	pool := newTestDirectory()
 	defer pool.RemoveAll()
 
 	pool.SetObserver(panicOnRegisterObserver{})
 
-	require.Panics(t, func() {
-		_ = pool.Register("primary", testConfig(":memory:"))
+	require.NotPanics(t, func() {
+		require.NoError(t, pool.Register("primary", testConfig(":memory:")))
 	})
+
+	// The source is really registered despite the Observer panicking.
+	executor := NewExecutor(pool)
+	require.NoError(t, executor.Run(context.Background(), "primary", func(ctx context.Context, db *sqlx.DB) error {
+		return nil
+	}))
 
 	// If observerMu leaked locked, this would hang forever instead of
 	// returning — bounded by a timeout so a regression fails the test
@@ -268,6 +298,53 @@ func TestDirectory_ObserverMuReleasedEvenIfCallbackPanics(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("SetObserver hung after an earlier Observer callback panicked — observerMu leaked locked")
 	}
+}
+
+func TestExecutor_Run_SurvivesPanickingObserveAcquire(t *testing.T) {
+	pool := newTestDirectory()
+	defer pool.RemoveAll()
+	require.NoError(t, pool.Register("primary", testConfig(":memory:")))
+	pool.SetObserver(panicOnAcquireObserver{})
+
+	executor := NewExecutor(pool)
+	var called bool
+	err := executor.Run(context.Background(), "primary", func(ctx context.Context, db *sqlx.DB) error {
+		called = true
+		return nil
+	})
+	require.NoError(t, err)
+	assert.True(t, called, "fn must still run even though ObserveAcquire panicked")
+}
+
+func TestExecutor_Run_SurvivesPanickingObserveComplete(t *testing.T) {
+	pool := newTestDirectory()
+	defer pool.RemoveAll()
+	require.NoError(t, pool.Register("primary", testConfig(":memory:")))
+	pool.SetObserver(panicOnCompleteObserver{})
+
+	executor := NewExecutor(pool)
+	err := executor.Run(context.Background(), "primary", func(ctx context.Context, db *sqlx.DB) error {
+		return nil
+	})
+	require.NoError(t, err, "a panicking ObserveComplete must not fail a Run whose fn succeeded")
+}
+
+// TestExecutor_Run_FnPanicStillPropagatesEvenIfObserveCompleteAlsoPanics
+// proves the two recover layers compose correctly: fn's panic must reach
+// the caller unchanged even when the Observer notified about it panics too
+// — the Observer's panic must not replace or swallow fn's.
+func TestExecutor_Run_FnPanicStillPropagatesEvenIfObserveCompleteAlsoPanics(t *testing.T) {
+	pool := newTestDirectory()
+	defer pool.RemoveAll()
+	require.NoError(t, pool.Register("primary", testConfig(":memory:")))
+	pool.SetObserver(panicOnCompleteObserver{})
+
+	executor := NewExecutor(pool)
+	require.PanicsWithValue(t, "fn-boom", func() {
+		_ = executor.Run(context.Background(), "primary", func(ctx context.Context, db *sqlx.DB) error {
+			panic("fn-boom")
+		})
+	})
 }
 
 func TestExecutor_Run_NotifiesObserverOnSuccess(t *testing.T) {

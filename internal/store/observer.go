@@ -16,6 +16,13 @@ import "time"
 // calling back into dbstore, or it distorts the very durations/timings it's
 // there to measure (and, in the Run case, holds the throttle slot or
 // in-flight count open longer than the operation itself did).
+//
+// Unlike httptrace, a panicking Observer method does not crash the call that
+// triggered it: dbstore recovers around every Observer invocation (see
+// safeObserve) and discards the panic. Observability is deliberately
+// best-effort relative to the actual operation — a bug in a metrics or
+// logging Observer must never be able to fail a repository call whose fn
+// itself succeeded.
 type Observer interface {
 	// ObserveSourceSnapshot is called once, synchronously, by SetObserver,
 	// with every source currently registered at the moment this Observer is
@@ -53,38 +60,51 @@ type Observer interface {
 	ObserveComplete(source string, duration time.Duration, err error)
 }
 
+// safeObserve calls fn — always a single Observer method invocation — and
+// recovers if it panics, per Observer's doc comment: an Observer bug must
+// never crash the Register/Remove/SetObserver/Run call that triggered it.
+// The panic is discarded, not logged, because core has no logging facility
+// to discard it into safely either; an Observer that needs its own panics
+// visible should recover and report them itself.
+func safeObserve(fn func()) {
+	defer func() { _ = recover() }()
+	fn()
+}
+
 // MultiObserver fans a single Observer call out to every Observer in the
 // slice, in order — the Observer equivalent of io.MultiWriter, for
 // attaching more than one (e.g. Prometheus metrics and a custom audit log)
-// with SetObserver, which only holds one.
+// with SetObserver, which only holds one. Each member is called through
+// safeObserve individually, so one member panicking doesn't stop the rest
+// of the group from being notified.
 type MultiObserver []Observer
 
 func (m MultiObserver) ObserveSourceSnapshot(sources []string) {
 	for _, o := range m {
-		o.ObserveSourceSnapshot(sources)
+		safeObserve(func() { o.ObserveSourceSnapshot(sources) })
 	}
 }
 
 func (m MultiObserver) ObserveSourceRegistered(source string) {
 	for _, o := range m {
-		o.ObserveSourceRegistered(source)
+		safeObserve(func() { o.ObserveSourceRegistered(source) })
 	}
 }
 
 func (m MultiObserver) ObserveSourceRemoved(source string) {
 	for _, o := range m {
-		o.ObserveSourceRemoved(source)
+		safeObserve(func() { o.ObserveSourceRemoved(source) })
 	}
 }
 
 func (m MultiObserver) ObserveAcquire(source string, waited time.Duration, err error) {
 	for _, o := range m {
-		o.ObserveAcquire(source, waited, err)
+		safeObserve(func() { o.ObserveAcquire(source, waited, err) })
 	}
 }
 
 func (m MultiObserver) ObserveComplete(source string, duration time.Duration, err error) {
 	for _, o := range m {
-		o.ObserveComplete(source, duration, err)
+		safeObserve(func() { o.ObserveComplete(source, duration, err) })
 	}
 }

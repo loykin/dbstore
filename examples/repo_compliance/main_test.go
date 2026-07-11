@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"testing"
+
+	"github.com/loykin/dbstore/dbstoretest"
 )
 
 // runUserRepoComplianceSuite asserts the behavior every UserRepository
@@ -77,27 +79,35 @@ func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRep
 	})
 }
 
-func TestUserRepoCompliance_SQLite(t *testing.T) {
-	runUserRepoComplianceSuite(t, func(t *testing.T) UserRepository {
-		repo, cleanup, err := setupSQLite(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(cleanup)
-		return repo
-	})
-}
+// TestUserRepoCompliance runs the one compliance suite above against both
+// backends via dbstoretest.RunComplianceSuite, instead of a hand-written
+// loop — see the root README's "Why" for what this pattern is for.
+func TestUserRepoCompliance(t *testing.T) {
+	dbstoretest.RunComplianceSuite(t, []dbstoretest.Fixture[UserRepository]{
+		{
+			Name: "SQLite",
+			New: func(t *testing.T) UserRepository {
+				repo, cleanup, err := setupSQLite(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(cleanup)
+				return repo
+			},
+		},
+		{
+			Name: "REST",
+			New: func(t *testing.T) UserRepository {
+				server := newFakeUsersServer()
+				t.Cleanup(server.Close)
 
-func TestUserRepoCompliance_REST(t *testing.T) {
-	runUserRepoComplianceSuite(t, func(t *testing.T) UserRepository {
-		server := newFakeUsersServer()
-		t.Cleanup(server.Close)
-
-		repo, cleanup, err := setupREST(server.URL)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(cleanup)
-		return repo
-	})
+				repo, cleanup, err := setupREST(server.URL)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(cleanup)
+				return repo
+			},
+		},
+	}, runUserRepoComplianceSuite)
 }

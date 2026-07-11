@@ -1,24 +1,34 @@
 # dbstore
 
-dbstore is a small Go runtime for building repository implementations whose
-behavior you can verify once and trust across whichever backend is actually
-behind them.
+dbstore is a small Go runtime for named backend clients: register a client
+under a name, get repositories scoped and throttled access to it by that
+name, and let dbstore own its lifecycle — the same way regardless of
+whether the client is a `*sql.DB`, an HTTP client, or an OpenSearch SDK
+client. See "Guarantees" below for exactly what that lifecycle handling
+promises.
 
 ## Why
 
-Repositories drift. You write a `UserRepository` backed by SQLite, ship it,
-and at some point you need a second implementation — a move to PostgreSQL, a
-REST-backed variant for one tenant, a rewrite because the SDK changed. The
-question that actually matters at that point isn't "does it compile", it's
-"does `FindByID` on a missing row still return the same kind of error, does a
-failed batch insert still roll back, does `FindAll` still come back in the
-same order." Usually there's no real way to answer that other than hoping, or
-maintaining two backend-specific test files that assert slightly different
-things because nobody kept them in sync.
+Most Go services eventually need more than one named connection to more
+than one backend — a primary and a replica database, a search cluster
+alongside SQL, a per-tenant database opened on demand. That usually turns
+into a hand-rolled `map[string]*sql.DB` behind a mutex, a bespoke "did we
+already open this one" check, an ad hoc concurrency limiter so one slow
+source can't starve the rest, and a shutdown loop that closes everything
+cleanly — rewritten per project and per backend type, and easy to get
+subtly wrong (a lock held across a slow connect call is a classic one).
+dbstore factors that out once, generically over any backend client type,
+and stops there: it does not try to unify SQL transactions, REST calls, and
+search queries behind one interface, since that kind of abstraction tends
+to leak the moment two backends diverge in how they actually work.
 
-dbstore is built so that question has one answer instead of two: write one
-behavioral test suite against the repository's interface, and run it against
-every backend implementation.
+**The most valuable thing this setup enables** is repository portability.
+Because every backend implementation of a repository has the same
+shape — a `Source[T]` embedded in the repository, `Run` scoping every
+operation to the named client — swapping the backend only ever changes
+`T`, never the shape of the repository. That means one behavioral test
+suite, written once against the repository's interface, can run unchanged
+against every implementation. This is the scenario it targets:
 
 ```go
 // One contract, owned by the application:
@@ -28,9 +38,9 @@ type UserRepository interface {
 	FindAll(ctx context.Context) ([]User, error)
 }
 
-// One suite, also owned by the application — dbstore doesn't ship this for
-// you, since it doesn't know your repository's contract, but it's what
-// makes writing it worthwhile:
+// One suite, also owned by the application — dbstore doesn't know your
+// repository's contract, so it can't write the assertions for you, only
+// the loop that runs them per backend (see dbstoretest below):
 func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRepository) {
 	t.Run("Create_and_FindByID", func(t *testing.T) {
 		repo := newRepo(t)
@@ -48,18 +58,23 @@ func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRep
 }
 
 // Run against every backend:
-func TestUserRepo_SQLite(t *testing.T)   { runUserRepoComplianceSuite(t, sqliteFixture) }
-func TestUserRepo_Postgres(t *testing.T) { runUserRepoComplianceSuite(t, postgresFixture) }
+func TestUserRepo(t *testing.T) {
+	dbstoretest.RunComplianceSuite(t, []dbstoretest.Fixture[UserRepository]{
+		{Name: "SQLite", New: sqliteFixture},
+		{Name: "Postgres", New: postgresFixture},
+	}, runUserRepoComplianceSuite)
+}
 ```
 
 `sqliteFixture` and `postgresFixture` are closures that construct the same
 repository type over a different `T` — a `*sqlx.DB` opened against SQLite in
-one case, PostgreSQL in the other. dbstore's own tests do exactly this
-(`internal/store/repo_compliance_test.go`, run against both a real SQLite
-database and a PostgreSQL container). The whole reason this is possible with
-so little ceremony is `Source[T]`: every backend implementation of
-`UserRepository` embeds one, so swapping the backend only ever changes `T`,
-never the shape of the repository or the suite that tests it.
+one case, PostgreSQL in the other. dbstore's own tests run this same suite
+against both a real SQLite database and a PostgreSQL container
+(`internal/store/repo_compliance_test.go`; two separate `Test` functions
+there, not `dbstoretest`, since the PostgreSQL one needs a `-tags
+integration` build tag the SQLite one doesn't). Swapping the backend only
+ever changes `T`, never the shape of the repository or the suite that tests
+it, because every implementation embeds a `Source[T]`.
 
 That example keeps `T` inside one backend family (`*sqlx.DB` either way), so
 `examples/repo_compliance` goes one step further: the same
@@ -70,16 +85,11 @@ Transactional rollback isn't part of that shared suite, since not every
 backend can guarantee it; it's exactly the kind of backend-specific
 capability that stays out of the common contract.
 
-None of that works if standing up a second backend means hand-rolling a new
-connection registry each time — so dbstore also handles the layer underneath
-`Source[T]`: named registration, a per-source concurrency throttle so one
-slow backend can't starve the rest, and safe concurrent open/close, the same
-way regardless of whether `T` is `*sql.DB`, an HTTP client, or an OpenSearch
-SDK client. That plumbing (`Directory[T]`, `Adapter[T]`, `Executor[T]`) is
-necessary — a hand-rolled version of it is genuinely easy to get subtly wrong
-(e.g. connecting to a new source while holding the registry's lock, which
-serializes every other source's registration behind it) — but it exists in
-service of the compliance suite above, not as the point on its own.
+What makes writing that suite worth it is the layer underneath: named
+registration, a per-source concurrency throttle so one slow backend can't
+starve the rest, and safe concurrent open/close, the same way regardless of
+whether `T` is `*sql.DB`, an HTTP client, or an OpenSearch SDK client. See
+"Guarantees" below for exactly what that plumbing promises.
 
 **Where this fits next to what you already know:**
 
@@ -124,8 +134,7 @@ import (
 
 // userRepo is the application-owned repository. Embedding sqlxadapter.Source
 // gives it scoped, throttled access to whichever *sqlx.DB is registered
-// under "primary" — this is the pattern every backend implementation below
-// follows, not something Quick Start simplifies away.
+// under "primary".
 type userRepo struct {
 	sqlxadapter.Source
 }
@@ -212,12 +221,43 @@ DriverBuilder[T]         RegisterDriver — knows how to open one T from a Sourc
   -> Repository Interface
 ```
 
-The repository is the important application boundary. The application owns its
-repository interfaces, repository implementations, and backend-specific
-operations. dbstore owns source registration, lifecycle, throttling, and scoped
-client access — in other words, dbstore stops at `Source[T]`. Everything
-below — `Config` files, transactions, REST/OpenSearch/Elasticsearch, custom
+The application owns repository interfaces, repository implementations, and
+backend-specific operations. dbstore owns source registration, lifecycle,
+throttling, and scoped client access, and stops there. Everything below —
+`Config` files, transactions, REST/OpenSearch/Elasticsearch, custom
 drivers — builds on this same shape.
+
+## Guarantees
+
+These are the concrete promises the chain above makes — verified by tests in
+`internal/store` (including under `-race`), not just asserted here:
+
+- **Visibility** — a source becomes visible to `Executor.Run`, and to
+  `Open`'s duplicate-name check, only once its driver's `Open` call
+  succeeds. A failed `Open` never mutates the source set.
+- **Safe removal** — once `Remove` returns, no new `Run` call against that
+  name will start. A `Run` already in flight when `Remove` is called is
+  allowed to finish before the client is closed.
+- **No double-open** — if two callers race to open the same name
+  concurrently, exactly one succeeds. The other gets an error, and its own
+  client is closed rather than leaked if it managed to connect one before
+  losing the race.
+- **`Configure` publishes sequentially and rolls back what it opened, but
+  isn't atomic** — sources are opened one at a time; if any fails, every
+  source *this call* already opened is closed again before the error
+  returns. Sources opened earlier in the same call are genuinely visible in
+  the window before that rollback — a concurrent `Run` could reach them. A
+  rollback `Remove`'s own error (e.g. `Close` failing) is discarded; only
+  the triggering `Open` error is returned. A name colliding with a source
+  from an *earlier* `Configure` (or `Open`) call is left untouched.
+- **An Observer can't crash the operation it's observing** — a panicking
+  `Observer` method is recovered and discarded (see "Metrics" below); it
+  cannot fail a `Run` whose `fn` succeeded or make a successful `Register`
+  look like it failed.
+
+`MaxConcurrency <= 0` means unthrottled — `Run` calls proceed without
+waiting, same as if `PoolConfig` were never set. It does not block every
+call, and it is not a placeholder for "apply some default".
 
 ## Packages
 
@@ -228,6 +268,7 @@ github.com/loykin/dbstore/adapters/rest          REST/HTTP adapter
 github.com/loykin/dbstore/adapters/opensearch    OpenSearch adapter
 github.com/loykin/dbstore/adapters/elasticsearch Elasticsearch adapter
 github.com/loykin/dbstore/adapters/prometheus    Prometheus dbstore.Observer
+github.com/loykin/dbstore/dbstoretest            compliance-suite-per-fixture test helper
 ```
 
 The root package has no SQL or REST dependency. Backend-specific helpers live
@@ -305,9 +346,11 @@ Equivalent JSON:
 }
 ```
 
-`Configure` validates and opens all sources atomically: if any source fails
-to open, sources already opened by that call are closed again before the
-error is returned.
+`Configure` is not atomic in the database sense — it opens sources one at a
+time and rolls back what this call opened if any fails, but sources opened
+earlier in the same call are genuinely visible to concurrent `Run` calls
+before that rollback happens. See "Guarantees" below for the precise
+rollback scope.
 
 ### Source And Repository
 
@@ -496,11 +539,14 @@ type UserRepository interface {
 ```
 
 Each backend implementation keeps the source that matches its client type.
-Run the same compliance suite against every implementation to catch drift —
-this is the load-bearing reason `Source[T]` exists at all (see "Why" above).
+Running the same compliance suite against every implementation to catch
+drift is the most valuable thing this shape enables (see "Why" above).
+`github.com/loykin/dbstore/dbstoretest` provides `RunComplianceSuite` and
+`Fixture[R]` for the "run this suite once per named fixture" loop — it
+doesn't know your contract or write assertions for you, only the loop.
 `examples/repo_compliance` is a full, runnable version of this: one
 `UserRepository`, a SQLite-backed and a REST-backed implementation, and one
-test suite run unchanged against both.
+test suite run against both via `dbstoretest.RunComplianceSuite`.
 
 ## OpenSearch And Elasticsearch
 
@@ -665,14 +711,20 @@ for a full run scraping `/metrics`.
 
 ## Dynamic Sources
 
-Sources can be added and removed at runtime.
+Sources can be added and removed at runtime — e.g. opening one per tenant on
+first use and tearing it down when the tenant disconnects.
 
 ```go
 sql.Open("tenant-"+id, cfg)
 repo := NewUserRepo(exec, "tenant-"+id)
 
-// For lower-level dynamic removal, use dbstore.Directory[T] directly.
+// ...later, when the tenant is done:
+err := sql.Remove("tenant-" + id)
 ```
+
+`Remove` waits for that source's in-flight `Run` calls to finish and closes
+its client, without touching any other source. A new `Run` against a removed
+name fails immediately; the same name can be `Open`ed again afterward.
 
 ## Examples
 
@@ -688,7 +740,7 @@ examples/repository        repository implementation with sqlxadapter.Source
 examples/multi_db          multiple named SQL sources
 examples/sqlite_concurrent SQLite concurrency throttling
 examples/config            Config-driven setup spanning SQL and REST sources
-examples/repo_compliance   same repository compliance suite across SQLite and REST
+examples/repo_compliance   same compliance suite across SQLite and REST via dbstoretest
 examples/prometheus        SetObserver wired to Prometheus metrics
 ```
 
@@ -702,6 +754,7 @@ adapters/rest          REST adapter, source, client helpers
 adapters/opensearch    OpenSearch adapter, driver, source alias
 adapters/elasticsearch Elasticsearch adapter, driver, source alias
 adapters/prometheus    Observer implementation backed by Prometheus metrics
+dbstoretest            RunComplianceSuite/Fixture[R] test helper
 examples               runnable examples
 ```
 

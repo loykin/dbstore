@@ -55,6 +55,73 @@ func TestSource_RunTx(t *testing.T) {
 	}
 }
 
+// TestAdapter_Remove covers the dynamic-source teardown path the README's
+// "Dynamic Sources" section describes: open a per-tenant source, use it,
+// remove just that one, and confirm neither a second Open under the same
+// name nor a Run against it work afterward, while the adapter itself (and
+// any other source) stays usable.
+func TestAdapter_Remove(t *testing.T) {
+	ctx := context.Background()
+	adapter := New()
+	adapter.RegisterDefaultDrivers()
+	defer adapter.Close()
+
+	if err := adapter.Open("tenant-a", dbstore.SourceConfig{
+		Driver: DriverSQLite,
+		DSN:    ":memory:",
+		PoolConfig: dbstore.PoolConfig{
+			MaxOpenConns:   1,
+			MaxIdleConns:   1,
+			MaxConcurrency: 1,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	exec := adapter.Executor()
+	if err := exec.Run(ctx, "tenant-a", func(ctx context.Context, db *sqlx.DB) error {
+		_, err := db.ExecContext(ctx, `CREATE TABLE t (id INTEGER PRIMARY KEY)`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := adapter.Remove("tenant-a"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := exec.Run(ctx, "tenant-a", func(ctx context.Context, db *sqlx.DB) error {
+		return nil
+	}); err == nil {
+		t.Fatal("Run against a removed source should fail, got nil")
+	}
+
+	// Removing an already-removed (or never-registered) source is an error,
+	// not a silent no-op.
+	if err := adapter.Remove("tenant-a"); err == nil {
+		t.Fatal("Remove on an already-removed source should error, got nil")
+	}
+
+	// The same name can be opened again after removal.
+	if err := adapter.Open("tenant-a", dbstore.SourceConfig{
+		Driver: DriverSQLite,
+		DSN:    ":memory:",
+		PoolConfig: dbstore.PoolConfig{
+			MaxOpenConns:   1,
+			MaxIdleConns:   1,
+			MaxConcurrency: 1,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := exec.Run(ctx, "tenant-a", func(ctx context.Context, db *sqlx.DB) error {
+		_, err := db.ExecContext(ctx, `CREATE TABLE t (id INTEGER PRIMARY KEY)`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunTx_Rollback(t *testing.T) {
 	ctx := context.Background()
 	adapter := New()

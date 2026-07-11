@@ -13,6 +13,7 @@ type AdapterContract[T any] interface {
 	RegisterDriver(name string, driver DriverBuilder[T])
 	Open(name string, cfg SourceConfig) error
 	Configure(cfg Config) error
+	Remove(name string) error
 	Executor() *Executor[T]
 	SetObserver(o Observer)
 	Close()
@@ -49,8 +50,14 @@ func (a *Adapter[T]) Open(name string, cfg SourceConfig) error {
 
 // Configure is Open for every entry in cfg.Sources, keyed by name the same
 // way Open takes name as a parameter — SourceConfig itself never carries a
-// name. It is all-or-nothing: if any source fails to open, every source
-// already opened by this call is closed again before the error is returned.
+// name. It publishes sequentially, not atomically: sources are opened one
+// at a time, and if any fails, every source this call already opened is
+// closed again before the error is returned — but a source opened earlier
+// in the same call is genuinely visible to a concurrent Run before that
+// rollback runs. A rollback Remove's own error is discarded; only the
+// triggering Open error is returned. A name already registered by an
+// earlier call is left untouched — only names this call opened are rolled
+// back.
 func (a *Adapter[T]) Configure(cfg Config) error {
 	if _, ok := cfg.Sources[""]; ok {
 		return fmt.Errorf("configure source: name is required")
@@ -67,6 +74,15 @@ func (a *Adapter[T]) Configure(cfg Config) error {
 		opened = append(opened, name)
 	}
 	return nil
+}
+
+// Remove unregisters a single named source, waiting for its in-flight Run
+// calls to finish and closing its client, without touching any other
+// source. This is the entry point the "Dynamic Sources" pattern needs for
+// per-tenant teardown — Adapter has no other way to reach a single source
+// once opened, since Open only ever adds.
+func (a *Adapter[T]) Remove(name string) error {
+	return a.directory.Remove(name)
 }
 
 func (a *Adapter[T]) Executor() *Executor[T] {

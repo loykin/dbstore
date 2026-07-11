@@ -83,7 +83,7 @@ func (p *Directory[T]) SetObserver(o Observer) {
 	p.mu.Unlock()
 
 	if o != nil {
-		o.ObserveSourceSnapshot(names)
+		safeObserve(func() { o.ObserveSourceSnapshot(names) })
 	}
 }
 
@@ -135,7 +135,7 @@ func (p *Directory[T]) Register(name string, cfg SourceConfig) error {
 	p.mu.Unlock()
 
 	if observer != nil {
-		observer.ObserveSourceRegistered(name)
+		safeObserve(func() { observer.ObserveSourceRegistered(name) })
 	}
 	return nil
 }
@@ -201,7 +201,7 @@ func (p *Directory[T]) notifyRemoved(observer Observer, names ...string) {
 		return
 	}
 	for _, name := range names {
-		observer.ObserveSourceRemoved(name)
+		safeObserve(func() { observer.ObserveSourceRemoved(name) })
 	}
 }
 
