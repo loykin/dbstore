@@ -3,40 +3,96 @@
 dbstore is a small Go runtime for building repository implementations over
 named backend sources.
 
-It does not try to hide the differences between SQL, REST, messaging, object
-storage, or other backends. It only standardizes the runtime boundary around a
-backend client so repositories can be explicit, testable, and lifecycle-safe:
+## Why
 
-```text
-Repository Interface
-  -> Repository Implementation
-  -> Source[T]
-  -> Executor[T]
-  -> Directory[T]
-  -> Adapter[T]
-  -> DriverBuilder[T]
+Most Go services eventually need more than one named connection to more than
+one backend — a primary and a replica database, a search cluster alongside
+SQL, a per-tenant database opened on demand. That usually turns into a
+hand-rolled `map[string]*sql.DB` behind a mutex, a bespoke "did we already
+open this one" check, an ad hoc concurrency limiter so one slow source can't
+starve the rest, and a shutdown loop that closes everything cleanly. None of
+that is specific to SQL or to any single backend, yet it tends to get
+rewritten per project and per backend type anyway — and the REST/search
+client usually doesn't get the same lifecycle discipline the database did,
+because it was bolted on separately.
+
+dbstore factors that lifecycle plumbing out once, generically over any
+backend client type (`*sql.DB`, an HTTP client, an OpenSearch SDK client,
+whatever `T` you have), and stops there. It deliberately does not try to
+unify SQL transactions, REST calls, and search queries behind one interface —
+that kind of abstraction tends to leak the moment two backends diverge in how
+they actually work. Instead, registering a named source, throttling
+concurrent operations against it, and closing it down safely are handled the
+same way regardless of backend; what you do with the client once you have
+scoped access to it stays entirely up to the repository you write.
+
+Concretely, without dbstore this is usually where the hand-rolled version
+starts:
+
+```go
+type dbRegistry struct {
+	mu  sync.Mutex
+	dbs map[string]*sql.DB
+	sem map[string]chan struct{} // concurrency limiter, added later once one slow query starves the rest
+}
+
+func (r *dbRegistry) get(name, dsn string) (*sql.DB, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock() // connects while holding the lock — every other source blocks until this one finishes
+	if db, ok := r.dbs[name]; ok {
+		return db, nil
+	}
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return nil, err
+	}
+	r.dbs[name] = db
+	r.sem[name] = make(chan struct{}, 5)
+	return db, nil
+}
+
+// ...and this gets rewritten again, slightly differently, for the REST
+// client and the search client, neither of which get the throttle.
 ```
 
-From the infrastructure side, the same chain is assembled in reverse:
+Fixing the lock-held-during-connect bug (block registration, not lookups;
+release the lock before the network call; re-check under the lock in case
+another goroutine won the race; close the loser) is exactly what
+`Directory[T].Register` already does — the whole registry, throttle, and
+safe-shutdown code above collapses to:
 
-```text
-DriverBuilder[T]
-  -> Adapter[T]
-  -> Directory[T]
-  -> Executor[T]
-  -> Source[T]
-  -> Repository Implementation
-  -> Repository Interface
+```go
+sql := sqlxadapter.New()
+sql.RegisterDriver("postgres", myPostgresDriver{})
+sql.Open("primary", dbstore.SourceConfig{
+	Driver: "postgres", DSN: dsn,
+	PoolConfig: dbstore.PoolConfig{MaxConcurrency: 5},
+})
+defer sql.Close()
+
+exec := sql.Executor()
+exec.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error { /* ... */ })
 ```
 
-The repository is the important application boundary. The application owns its
-repository interfaces, repository implementations, and backend-specific
-operations. dbstore owns source registration, lifecycle, throttling, and scoped
-client access.
+— and the identical calls, with `T` swapped, work for an HTTP client, an
+OpenSearch SDK client, or anything else with the same registration,
+throttling, and shutdown guarantees.
 
-In other words, dbstore stops at `Source[T]`. Repository implementations keep a
-source field and translate backend-specific operations into the application's
-repository contract.
+**Where this fits next to what you already know:**
+
+- **Plain `database/sql` / `sqlx`** — fine for one connection. Multi-source
+  lifecycle, per-source throttling, and non-SQL backends aren't in scope; you
+  build the registry above yourself.
+- **An ORM (gorm, ent, ...)** — solves query building and struct mapping, not
+  source lifecycle, and is SQL-only. Adding OpenSearch or a REST API next to
+  it means bolting on unrelated, differently-shaped infrastructure.
+- **A hand-rolled registry** — works until it needs throttling, safe
+  concurrent registration, or a second backend type, at which point it's
+  usually rewritten (see above).
+- **dbstore** — replaces only the registration/lifecycle/throttling/scoped-
+  access layer, for any backend type, and leaves query building and
+  operations to you. It composes with sqlx, an ORM's underlying `*sql.DB`, or
+  a raw SDK client — whichever `T` you already have.
 
 ## Quick Start
 
@@ -133,10 +189,26 @@ func main() {
 
 No external database needed — `:memory:` SQLite runs this as-is (see
 `examples/basic` for the same program without the repository wrapper, and
-`examples/repository` for a fuller multi-method repository). This is the
-whole lifecycle: `RegisterDriver` picks a backend, `Open` connects a named
-source, `Executor` gets scoped access to it, and a repository embeds a
-`Source` to turn that access into application-specific methods. Everything
+`examples/repository` for a fuller multi-method repository).
+
+## How It Fits Together
+
+The Quick Start code above builds this chain, bottom-up:
+
+```text
+DriverBuilder[T]         RegisterDriver — knows how to open one T from a SourceConfig
+  -> Adapter[T]           Open — registers and connects a named source
+  -> Directory[T]          (lifecycle + per-source concurrency throttle)
+  -> Executor[T]          Executor — scoped, throttled access to a named client
+  -> Source[T]            embedded in a repository for a Run method
+  -> Repository Implementation
+  -> Repository Interface
+```
+
+The repository is the important application boundary. The application owns its
+repository interfaces, repository implementations, and backend-specific
+operations. dbstore owns source registration, lifecycle, throttling, and scoped
+client access — in other words, dbstore stops at `Source[T]`. Everything
 below — `Config` files, transactions, REST/OpenSearch/Elasticsearch, custom
 drivers — builds on this same shape.
 
