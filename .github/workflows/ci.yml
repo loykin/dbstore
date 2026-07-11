@@ -97,6 +97,10 @@ jobs:
         working-directory: examples/config
         run: go test ./... && go run .
 
+      - name: Test repo_compliance
+        working-directory: examples/repo_compliance
+        run: go test ./... && go run .
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

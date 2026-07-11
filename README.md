@@ -1,98 +1,105 @@
 # dbstore
 
-dbstore is a small Go runtime for building repository implementations over
-named backend sources.
+dbstore is a small Go runtime for building repository implementations whose
+behavior you can verify once and trust across whichever backend is actually
+behind them.
 
 ## Why
 
-Most Go services eventually need more than one named connection to more than
-one backend — a primary and a replica database, a search cluster alongside
-SQL, a per-tenant database opened on demand. That usually turns into a
-hand-rolled `map[string]*sql.DB` behind a mutex, a bespoke "did we already
-open this one" check, an ad hoc concurrency limiter so one slow source can't
-starve the rest, and a shutdown loop that closes everything cleanly. None of
-that is specific to SQL or to any single backend, yet it tends to get
-rewritten per project and per backend type anyway — and the REST/search
-client usually doesn't get the same lifecycle discipline the database did,
-because it was bolted on separately.
+Repositories drift. You write a `UserRepository` backed by SQLite, ship it,
+and at some point you need a second implementation — a move to PostgreSQL, a
+REST-backed variant for one tenant, a rewrite because the SDK changed. The
+question that actually matters at that point isn't "does it compile", it's
+"does `FindByID` on a missing row still return the same kind of error, does a
+failed batch insert still roll back, does `FindAll` still come back in the
+same order." Usually there's no real way to answer that other than hoping, or
+maintaining two backend-specific test files that assert slightly different
+things because nobody kept them in sync.
 
-dbstore factors that lifecycle plumbing out once, generically over any
-backend client type (`*sql.DB`, an HTTP client, an OpenSearch SDK client,
-whatever `T` you have), and stops there. It deliberately does not try to
-unify SQL transactions, REST calls, and search queries behind one interface —
-that kind of abstraction tends to leak the moment two backends diverge in how
-they actually work. Instead, registering a named source, throttling
-concurrent operations against it, and closing it down safely are handled the
-same way regardless of backend; what you do with the client once you have
-scoped access to it stays entirely up to the repository you write.
-
-Concretely, without dbstore this is usually where the hand-rolled version
-starts:
+dbstore is built so that question has one answer instead of two: write one
+behavioral test suite against the repository's interface, and run it against
+every backend implementation.
 
 ```go
-type dbRegistry struct {
-	mu  sync.Mutex
-	dbs map[string]*sql.DB
-	sem map[string]chan struct{} // concurrency limiter, added later once one slow query starves the rest
+// One contract, owned by the application:
+type UserRepository interface {
+	Create(ctx context.Context, name string) error
+	FindByID(ctx context.Context, id int) (*User, error)
+	FindAll(ctx context.Context) ([]User, error)
 }
 
-func (r *dbRegistry) get(name, dsn string) (*sql.DB, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock() // connects while holding the lock — every other source blocks until this one finishes
-	if db, ok := r.dbs[name]; ok {
-		return db, nil
-	}
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		return nil, err
-	}
-	r.dbs[name] = db
-	r.sem[name] = make(chan struct{}, 5)
-	return db, nil
+// One suite, also owned by the application — dbstore doesn't ship this for
+// you, since it doesn't know your repository's contract, but it's what
+// makes writing it worthwhile:
+func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRepository) {
+	t.Run("Create_and_FindByID", func(t *testing.T) {
+		repo := newRepo(t)
+		require.NoError(t, repo.Create(ctx, "Alice"))
+		users, _ := repo.FindAll(ctx)
+		u, err := repo.FindByID(ctx, users[0].ID)
+		require.NoError(t, err)
+		assert.Equal(t, "Alice", u.Name)
+	})
+	t.Run("FindByID_NotFound", func(t *testing.T) {
+		_, err := newRepo(t).FindByID(ctx, 999)
+		assert.Error(t, err)
+	})
+	// ...
 }
 
-// ...and this gets rewritten again, slightly differently, for the REST
-// client and the search client, neither of which get the throttle.
+// Run against every backend:
+func TestUserRepo_SQLite(t *testing.T)   { runUserRepoComplianceSuite(t, sqliteFixture) }
+func TestUserRepo_Postgres(t *testing.T) { runUserRepoComplianceSuite(t, postgresFixture) }
 ```
 
-Fixing the lock-held-during-connect bug (block registration, not lookups;
-release the lock before the network call; re-check under the lock in case
-another goroutine won the race; close the loser) is exactly what
-`Directory[T].Register` already does — the whole registry, throttle, and
-safe-shutdown code above collapses to:
+`sqliteFixture` and `postgresFixture` are closures that construct the same
+repository type over a different `T` — a `*sqlx.DB` opened against SQLite in
+one case, PostgreSQL in the other. dbstore's own tests do exactly this
+(`internal/store/repo_compliance_test.go`, run against both a real SQLite
+database and a PostgreSQL container). The whole reason this is possible with
+so little ceremony is `Source[T]`: every backend implementation of
+`UserRepository` embeds one, so swapping the backend only ever changes `T`,
+never the shape of the repository or the suite that tests it.
 
-```go
-sql := sqlxadapter.New()
-sql.RegisterDriver("postgres", myPostgresDriver{})
-sql.Open("primary", dbstore.SourceConfig{
-	Driver: "postgres", DSN: dsn,
-	PoolConfig: dbstore.PoolConfig{MaxConcurrency: 5},
-})
-defer sql.Close()
+That example keeps `T` inside one backend family (`*sqlx.DB` either way), so
+`examples/repo_compliance` goes one step further: the same
+`runUserRepoComplianceSuite` runs, completely unchanged, against a
+SQLite-backed `UserRepository` and a REST-backed one hitting a fake JSON API
+— two genuinely different `T`s (`*sqlx.DB` vs `*restadapter.Client`).
+Transactional rollback isn't part of that shared suite, since not every
+backend can guarantee it; it's exactly the kind of backend-specific
+capability that stays out of the common contract.
 
-exec := sql.Executor()
-exec.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error { /* ... */ })
-```
-
-— and the identical calls, with `T` swapped, work for an HTTP client, an
-OpenSearch SDK client, or anything else with the same registration,
-throttling, and shutdown guarantees.
+None of that works if standing up a second backend means hand-rolling a new
+connection registry each time — so dbstore also handles the layer underneath
+`Source[T]`: named registration, a per-source concurrency throttle so one
+slow backend can't starve the rest, and safe concurrent open/close, the same
+way regardless of whether `T` is `*sql.DB`, an HTTP client, or an OpenSearch
+SDK client. That plumbing (`Directory[T]`, `Adapter[T]`, `Executor[T]`) is
+necessary — a hand-rolled version of it is genuinely easy to get subtly wrong
+(e.g. connecting to a new source while holding the registry's lock, which
+serializes every other source's registration behind it) — but it exists in
+service of the compliance suite above, not as the point on its own.
 
 **Where this fits next to what you already know:**
 
-- **Plain `database/sql` / `sqlx`** — fine for one connection. Multi-source
-  lifecycle, per-source throttling, and non-SQL backends aren't in scope; you
-  build the registry above yourself.
-- **An ORM (gorm, ent, ...)** — solves query building and struct mapping, not
-  source lifecycle, and is SQL-only. Adding OpenSearch or a REST API next to
-  it means bolting on unrelated, differently-shaped infrastructure.
-- **A hand-rolled registry** — works until it needs throttling, safe
-  concurrent registration, or a second backend type, at which point it's
-  usually rewritten (see above).
-- **dbstore** — replaces only the registration/lifecycle/throttling/scoped-
-  access layer, for any backend type, and leaves query building and
-  operations to you. It composes with sqlx, an ORM's underlying `*sql.DB`, or
-  a raw SDK client — whichever `T` you already have.
+- **Plain `database/sql` / `sqlx`** — fine for one backend, one
+  implementation. Nothing to verify across implementations because there's
+  only one; multi-backend lifecycle and throttling aren't in scope either.
+- **An ORM (gorm, ent, ...)** — solves query building and struct mapping for
+  one SQL database at a time, not cross-backend behavioral verification, and
+  doesn't extend to REST or search.
+- **Go Cloud Development Kit (`gocloud.dev`)** — the closest prior art: a
+  `driver` interface plus `drivertest` conformance test packages, run against
+  every cloud provider's implementation of `blob.Bucket`, `pubsub.Topic`,
+  etc. The difference is that gocloud.dev also unifies the *operations*
+  (`blob.Bucket` is one fixed API across S3/GCS/Azure), which is why it ships
+  the conformance tests itself — it owns the contract. dbstore stops at
+  lifecycle and leaves the contract, and the suite that verifies it, to the
+  application, so it isn't limited to a fixed set of capabilities.
+- **A hand-rolled registry** — works until a second backend needs to prove it
+  behaves like the first, at which point either the tests diverge or someone
+  builds most of `Source[T]`/`Directory[T]` anyway.
 
 ## Quick Start
 
@@ -215,10 +222,10 @@ drivers — builds on this same shape.
 ## Packages
 
 ```text
-github.com/loykin/dbstore               core runtime
-github.com/loykin/dbstore/adapters/sqlx SQL/sqlx adapter
-github.com/loykin/dbstore/adapters/rest REST/HTTP adapter
-github.com/loykin/dbstore/adapters/opensearch OpenSearch adapter
+github.com/loykin/dbstore                        core runtime
+github.com/loykin/dbstore/adapters/sqlx          SQL/sqlx adapter
+github.com/loykin/dbstore/adapters/rest          REST/HTTP adapter
+github.com/loykin/dbstore/adapters/opensearch    OpenSearch adapter
 github.com/loykin/dbstore/adapters/elasticsearch Elasticsearch adapter
 ```
 
@@ -403,6 +410,24 @@ Use `adapters/rest` when the backend is an HTTP/JSON API.
 import restadapter "github.com/loykin/dbstore/adapters/rest"
 ```
 
+`restadapter.Driver` covers the common case — unlike SQL dialects, `net/http`
+needs no backend-specific low-level driver import, so this works for any REST
+endpoint out of the box:
+
+```go
+rest := restadapter.New()
+rest.RegisterDriver("rest", restadapter.Driver{})
+
+err := rest.Open("search", dbstore.SourceConfig{
+	Driver: "rest",
+	DSN:    "http://localhost:9200",
+})
+```
+
+Implement a custom `DriverBuilder[*restadapter.Client]` only when opening the
+client needs custom auth, headers, or transport beyond what `Driver.Header`
+and `Driver.HTTPClient` cover:
+
 ```go
 type RESTDriver struct{}
 
@@ -410,14 +435,29 @@ func (d RESTDriver) Open(cfg dbstore.SourceConfig) (*restadapter.Client, error) 
 	// Parse cfg.DSN and construct a backend-specific restadapter.Client.
 }
 
-rest := restadapter.New()
-rest.RegisterDriver("rest", RESTDriver{})
+rest.RegisterDriver("custom-rest", RESTDriver{})
+```
 
-err := rest.Open("search", dbstore.SourceConfig{
-	Driver: "rest",
-	DSN:    "http://localhost:9200",
+**Auth** has two levels, matching whether the credential is static or must be
+computed per request:
+
+```go
+// Static credentials go straight in Header — BasicAuth covers HTTP Basic Auth,
+// an API key is http.Header{"X-Api-Key": []string{key}} the same way.
+rest.RegisterDriver("basic-auth", restadapter.Driver{
+	Header: restadapter.BasicAuth("app", "s3cret"),
+})
+
+// Auth that must be refreshed or computed per request (OAuth2 token refresh,
+// request signing, mTLS) goes in HTTPClient instead — pass an *http.Client
+// whose Transport is a custom http.RoundTripper. This is the same extension
+// point golang.org/x/oauth2 and most cloud SDK auth helpers already target.
+rest.RegisterDriver("bearer-auth", restadapter.Driver{
+	HTTPClient: &http.Client{Transport: myTokenRefreshingTransport{}},
 })
 ```
+
+See `examples/rest` for both running against fake servers.
 
 Custom HTTP APIs can share this transport adapter. The repository owns paths,
 request bodies, and response semantics. OpenSearch and Elasticsearch have
@@ -455,7 +495,11 @@ type UserRepository interface {
 ```
 
 Each backend implementation keeps the source that matches its client type.
-Run the same compliance suite against every implementation to catch drift.
+Run the same compliance suite against every implementation to catch drift —
+this is the load-bearing reason `Source[T]` exists at all (see "Why" above).
+`examples/repo_compliance` is a full, runnable version of this: one
+`UserRepository`, a SQLite-backed and a REST-backed implementation, and one
+test suite run unchanged against both.
 
 ## OpenSearch And Elasticsearch
 
@@ -545,17 +589,17 @@ examples/repository        repository implementation with sqlxadapter.Source
 examples/multi_db          multiple named SQL sources
 examples/sqlite_concurrent SQLite concurrency throttling
 examples/config            Config-driven setup spanning SQL and REST sources
+examples/repo_compliance   same repository compliance suite across SQLite and REST
 ```
 
 ## Layout
 
 ```text
-dbstore.go       public core API
-internal/store   core implementation
-adapters/sqlx    SQL/sqlx adapter, source, transactions, pool config
-adapters/rest    REST adapter, source, client helpers
-adapters/opensearch OpenSearch adapter, driver, source alias
+dbstore.go             public core API
+internal/store         core implementation
+adapters/sqlx          SQL/sqlx adapter, source, transactions, pool config
+adapters/rest          REST adapter, source, client helpers
+adapters/opensearch    OpenSearch adapter, driver, source alias
 adapters/elasticsearch Elasticsearch adapter, driver, source alias
-examples         runnable examples
-docs             design notes
+examples               runnable examples
 ```
