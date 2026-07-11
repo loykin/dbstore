@@ -31,8 +31,12 @@ type Directory[T any] struct {
 	// observerMu orders Observer callback invocations to match the order
 	// their data mutations were linearized by mu — see SetObserver's doc
 	// comment for why a second lock is needed for this at all, instead of
-	// just capturing data under mu and calling back outside it.
-	observerMu sync.Mutex
+	// just capturing data under mu and calling back outside it. It is an
+	// observerLock, not a plain sync.Mutex, so that an Observer callback
+	// reentering Register/Remove/RemoveAll/SetObserver on this Directory
+	// panics immediately instead of self-deadlocking — see observerLock's
+	// doc comment.
+	observerMu observerLock
 }
 
 // SetObserver registers an Observer to receive Executor[T].Run timing and
@@ -78,13 +82,32 @@ func (p *Directory[T]) SetObserver(o Observer) {
 			names = append(names, name)
 		}
 	}
-	p.observerMu.Lock()
+	p.beginObserverHandoff()
 	defer p.observerMu.Unlock()
-	p.mu.Unlock()
 
 	if o != nil {
 		safeObserve(func() { o.ObserveSourceSnapshot(names) })
 	}
+}
+
+// beginObserverHandoff acquires observerMu and releases mu — the "ticket"
+// handoff SetObserver's doc comment describes — and returns the Observer to
+// notify. Callers must already hold mu (and must not have released it) when
+// calling this, and own releasing observerMu themselves afterward (directly
+// via defer, or through notifyRemoved).
+//
+// mu is released via defer, registered before observerMu.Lock() runs, so a
+// reentrant call — an Observer callback calling back into
+// Register/Remove/RemoveAll/SetObserver on this same Directory, panicking
+// observerMu.Lock() (see observerLock) — still releases mu on the way out
+// instead of leaking it locked forever. A plain, non-deferred
+// `p.mu.Unlock()` placed after observerMu.Lock() would skip on that panic
+// path, trading a deadlock on observerMu for one on mu instead.
+func (p *Directory[T]) beginObserverHandoff() Observer {
+	observer := p.observer
+	defer p.mu.Unlock()
+	p.observerMu.Lock()
+	return observer
 }
 
 func (p *Directory[T]) getObserver() Observer {
@@ -126,13 +149,13 @@ func (p *Directory[T]) Register(name string, cfg SourceConfig) error {
 		throttle:  newThrottle(cfg.PoolConfig.MaxConcurrency),
 		createdAt: time.Now(),
 	}
-	// Captured in the same critical section as the insert above, and
-	// observerMu reserved before mu is released — see SetObserver's doc
-	// comment for why both matter.
-	observer := p.observer
-	p.observerMu.Lock()
+	// beginObserverHandoff captures p.observer in the same critical section
+	// as the insert above, and reserves observerMu before releasing mu —
+	// see SetObserver's doc comment for why both matter, and
+	// beginObserverHandoff's for why mu is guaranteed to still release even
+	// if this panics.
+	observer := p.beginObserverHandoff()
 	defer p.observerMu.Unlock()
-	p.mu.Unlock()
 
 	if observer != nil {
 		safeObserve(func() { observer.ObserveSourceRegistered(name) })
@@ -150,16 +173,14 @@ func (p *Directory[T]) Remove(name string) error {
 		return fmt.Errorf("dbstore: %q not found", name)
 	}
 	delete(p.entries, name)
-	// Captured in the same critical section as the delete above, and
-	// observerMu reserved before mu is released — see SetObserver's doc
-	// comment for why both matter. The notification fires here, before
-	// waiting for in-flight work and closing the client below, because
-	// "removed" means "no longer in the registry", which is already true
-	// the moment delete() runs — draining and closing are a separate
-	// concern this Observer isn't reporting on.
-	observer := p.observer
-	p.observerMu.Lock()
-	p.mu.Unlock()
+	// beginObserverHandoff captures p.observer in the same critical section
+	// as the delete above, and reserves observerMu before releasing mu —
+	// see SetObserver's doc comment for why both matter. The notification
+	// fires here, before waiting for in-flight work and closing the client
+	// below, because "removed" means "no longer in the registry", which is
+	// already true the moment delete() runs — draining and closing are a
+	// separate concern this Observer isn't reporting on.
+	observer := p.beginObserverHandoff()
 	p.notifyRemoved(observer, name)
 
 	entry.wg.Wait() // wait for in-flight operations to finish
@@ -171,13 +192,11 @@ func (p *Directory[T]) RemoveAll() {
 	p.mu.Lock()
 	entries := p.entries
 	p.entries = make(map[string]*directoryEntry[T])
-	// Captured in the same critical section as the swap above, and
-	// observerMu reserved before mu is released — see SetObserver's doc
-	// comment for why both matter, and Remove's for why notification
-	// precedes draining/closing.
-	observer := p.observer
-	p.observerMu.Lock()
-	p.mu.Unlock()
+	// beginObserverHandoff captures p.observer in the same critical section
+	// as the swap above, and reserves observerMu before releasing mu — see
+	// SetObserver's doc comment for why both matter, and Remove's for why
+	// notification precedes draining/closing.
+	observer := p.beginObserverHandoff()
 	names := make([]string, 0, len(entries))
 	for name := range entries {
 		names = append(names, name)

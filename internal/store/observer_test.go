@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -297,6 +298,132 @@ func TestDirectory_ObserverPanicDoesNotCrashOrDeadlockRegister(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("SetObserver hung after an earlier Observer callback panicked — observerMu leaked locked")
+	}
+}
+
+// reentrantIntoRegisterObserver calls back into Register on the same
+// Directory from inside ObserveSourceRegistered — the self-deadlock
+// observerLock exists to catch. It recovers that panic itself (rather than
+// letting it reach the outer safeObserve) so the test can inspect it.
+type reentrantIntoRegisterObserver struct {
+	dir       *Directory[*sqlx.DB]
+	recovered any
+}
+
+func (r *reentrantIntoRegisterObserver) ObserveSourceSnapshot([]string) {}
+func (r *reentrantIntoRegisterObserver) ObserveSourceRegistered(source string) {
+	if source != "first" {
+		return
+	}
+	defer func() { r.recovered = recover() }()
+	_ = r.dir.Register("second", testConfig(":memory:"))
+}
+func (r *reentrantIntoRegisterObserver) ObserveSourceRemoved(string)                  {}
+func (r *reentrantIntoRegisterObserver) ObserveAcquire(string, time.Duration, error)  {}
+func (r *reentrantIntoRegisterObserver) ObserveComplete(string, time.Duration, error) {}
+
+func TestDirectory_ObserverReentrancyIntoRegisterPanicsInsteadOfHanging(t *testing.T) {
+	pool := newTestDirectory()
+	defer pool.RemoveAll()
+
+	obs := &reentrantIntoRegisterObserver{dir: pool}
+	pool.SetObserver(obs)
+
+	done := make(chan struct{})
+	var registerErr error
+	go func() {
+		defer close(done)
+		registerErr = pool.Register("first", testConfig(":memory:"))
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("DEADLOCK: Observer callback reentering Register hung instead of panicking")
+	}
+
+	// The reentrant nested Register("second") call panicked...
+	require.NotNil(t, obs.recovered, "expected the reentrant nested Register call to panic")
+	require.Contains(t, fmt.Sprint(obs.recovered), "called back into")
+
+	// ...but the outer Register("first") call that triggered it still
+	// succeeds, per Observer's documented panic-safety contract.
+	require.NoError(t, registerErr)
+
+	// Neither mu nor observerMu leaked locked: the Directory is still fully
+	// usable afterward.
+	executor := NewExecutor(pool)
+	require.NoError(t, executor.Run(context.Background(), "first", func(ctx context.Context, db *sqlx.DB) error {
+		return nil
+	}))
+	require.NoError(t, pool.Remove("first"))
+}
+
+// reentrantIntoSetObserverObserver calls back into SetObserver on the same
+// Directory from inside ObserveSourceSnapshot.
+type reentrantIntoSetObserverObserver struct {
+	dir       *Directory[*sqlx.DB]
+	recovered any
+}
+
+func (r *reentrantIntoSetObserverObserver) ObserveSourceSnapshot([]string) {
+	defer func() { r.recovered = recover() }()
+	r.dir.SetObserver(r)
+}
+func (r *reentrantIntoSetObserverObserver) ObserveSourceRegistered(string)               {}
+func (r *reentrantIntoSetObserverObserver) ObserveSourceRemoved(string)                  {}
+func (r *reentrantIntoSetObserverObserver) ObserveAcquire(string, time.Duration, error)  {}
+func (r *reentrantIntoSetObserverObserver) ObserveComplete(string, time.Duration, error) {}
+
+func TestDirectory_ObserverReentrancyIntoSetObserverPanicsInsteadOfHanging(t *testing.T) {
+	pool := newTestDirectory()
+	defer pool.RemoveAll()
+
+	obs := &reentrantIntoSetObserverObserver{dir: pool}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		pool.SetObserver(obs)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("DEADLOCK: Observer callback reentering SetObserver hung instead of panicking")
+	}
+
+	require.NotNil(t, obs.recovered, "expected the reentrant nested SetObserver call to panic")
+	require.Contains(t, fmt.Sprint(obs.recovered), "called back into")
+
+	// The Directory is still fully usable afterward.
+	require.NoError(t, pool.Register("primary", testConfig(":memory:")))
+}
+
+// TestDirectory_ConcurrentRegisterWithObserverNeverFalsePositives proves the
+// reentrancy guard only fires on genuine same-goroutine reentrancy: many
+// unrelated goroutines legitimately contending for observerMu (via Register)
+// at once must still just block on each other like a plain mutex, never
+// panic and never hang.
+func TestDirectory_ConcurrentRegisterWithObserverNeverFalsePositives(t *testing.T) {
+	pool := newTestDirectory()
+	defer pool.RemoveAll()
+	pool.SetObserver(&fakeObserver{})
+
+	const n = 50
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = pool.Register(fmt.Sprintf("source-%d", i), testConfig(":memory:"))
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		require.NoError(t, err, "source-%d", i)
 	}
 }
 

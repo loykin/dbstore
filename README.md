@@ -72,18 +72,15 @@ one case, PostgreSQL in the other. dbstore's own tests run this same suite
 against both a real SQLite database and a PostgreSQL container
 (`internal/store/repo_compliance_test.go`; two separate `Test` functions
 there, not `dbstoretest`, since the PostgreSQL one needs a `-tags
-integration` build tag the SQLite one doesn't). Swapping the backend only
-ever changes `T`, never the shape of the repository or the suite that tests
-it, because every implementation embeds a `Source[T]`.
+integration` build tag the SQLite one doesn't).
 
-That example keeps `T` inside one backend family (`*sqlx.DB` either way), so
-`examples/repo_compliance` goes one step further: the same
-`runUserRepoComplianceSuite` runs, completely unchanged, against a
-SQLite-backed `UserRepository` and a REST-backed one hitting a fake JSON API
-— two genuinely different `T`s (`*sqlx.DB` vs `*restadapter.Client`).
-Transactional rollback isn't part of that shared suite, since not every
-backend can guarantee it; it's exactly the kind of backend-specific
-capability that stays out of the common contract.
+`examples/repo_compliance` goes one step further, taking `T` outside a
+single backend family: the same `runUserRepoComplianceSuite` runs,
+completely unchanged, against a SQLite-backed `UserRepository` and a
+REST-backed one hitting a fake JSON API — `*sqlx.DB` vs
+`*restadapter.Client`. Transactional rollback isn't part of that shared
+suite, since not every backend can guarantee it; it's exactly the kind of
+backend-specific capability that stays out of the common contract.
 
 What makes writing that suite worth it is the layer underneath: named
 registration, a per-source concurrency throttle so one slow backend can't
@@ -254,6 +251,12 @@ These are the concrete promises the chain above makes — verified by tests in
   `Observer` method is recovered and discarded (see "Metrics" below); it
   cannot fail a `Run` whose `fn` succeeded or make a successful `Register`
   look like it failed.
+- **An Observer must not call back into the same `Directory`** — calling
+  `Register`/`Remove`/`RemoveAll`/`SetObserver` on the source's own
+  `Directory` from inside an Observer method is a same-goroutine reentrancy,
+  not ordinary contention, and self-deadlocks the lock that orders callback
+  delivery. dbstore detects this and panics immediately instead of hanging
+  forever; do that work from a separate goroutine instead.
 
 `MaxConcurrency <= 0` means unthrottled — `Run` calls proceed without
 waiting, same as if `PoolConfig` were never set. It does not block every
@@ -538,15 +541,15 @@ type UserRepository interface {
 }
 ```
 
-Each backend implementation keeps the source that matches its client type.
-Running the same compliance suite against every implementation to catch
-drift is the most valuable thing this shape enables (see "Why" above).
-`github.com/loykin/dbstore/dbstoretest` provides `RunComplianceSuite` and
-`Fixture[R]` for the "run this suite once per named fixture" loop — it
-doesn't know your contract or write assertions for you, only the loop.
-`examples/repo_compliance` is a full, runnable version of this: one
-`UserRepository`, a SQLite-backed and a REST-backed implementation, and one
-test suite run against both via `dbstoretest.RunComplianceSuite`.
+Each backend implementation keeps the source that matches its client type
+(see "Why" above for what running one compliance suite against all of them
+buys you). `github.com/loykin/dbstore/dbstoretest` provides
+`RunComplianceSuite` and `Fixture[R]` for the "run this suite once per named
+fixture" loop — it doesn't know your contract or write assertions for you,
+only the loop. `examples/repo_compliance` is a full, runnable version of
+this: one `UserRepository`, a SQLite-backed and a REST-backed
+implementation, and one test suite run against both via
+`dbstoretest.RunComplianceSuite`.
 
 ## OpenSearch And Elasticsearch
 
