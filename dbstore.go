@@ -16,6 +16,8 @@ type (
 	PoolConfigApplier[T any] = store.PoolConfigApplier[T]
 	DriverRegistry[T any]    = store.DriverRegistry[T]
 	Closer                   = store.Closer
+	Observer                 = store.Observer
+	MultiObserver            = store.MultiObserver
 )
 
 func NewAdapter[T any]() *Adapter[T]                         { return store.NewAdapter[T]() }

@@ -32,6 +32,10 @@ func (a *Adapter) Executor() *dbstore.Executor[*opensearchapi.Client] {
 	return a.core.Executor()
 }
 
+func (a *Adapter) SetObserver(o dbstore.Observer) {
+	a.core.SetObserver(o)
+}
+
 func (a *Adapter) Close() {
 	a.core.Close()
 }

@@ -39,6 +39,10 @@ func (a *Adapter) Executor() *dbstore.Executor[*sqlx.DB] {
 	return a.core.Executor()
 }
 
+func (a *Adapter) SetObserver(o dbstore.Observer) {
+	a.core.SetObserver(o)
+}
+
 func (a *Adapter) Close() {
 	a.core.Close()
 }

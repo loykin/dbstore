@@ -227,6 +227,7 @@ github.com/loykin/dbstore/adapters/sqlx          SQL/sqlx adapter
 github.com/loykin/dbstore/adapters/rest          REST/HTTP adapter
 github.com/loykin/dbstore/adapters/opensearch    OpenSearch adapter
 github.com/loykin/dbstore/adapters/elasticsearch Elasticsearch adapter
+github.com/loykin/dbstore/adapters/prometheus    Prometheus dbstore.Observer
 ```
 
 The root package has no SQL or REST dependency. Backend-specific helpers live
@@ -578,6 +579,90 @@ that can block, and a timeout always points there. `DefaultPoolConfig` (10
 vs 5) and the SQLite example above (1 vs 1) both follow this ratio.
 `sqlxadapter.ApplyPoolConfig` logs a warning when it's violated.
 
+## Metrics
+
+`Directory[T]`/`Executor[T]` notify an optional `dbstore.Observer` of source
+lifecycle and `Run` calls — this is what actually lets you tell whether a
+timeout happened waiting on the throttle or inside `fn` (see "Pool Size vs
+Throttle" above), instead of just guessing.
+
+```go
+type Observer interface {
+	ObserveSourceSnapshot(sources []string)
+	ObserveSourceRegistered(source string)
+	ObserveSourceRemoved(source string)
+	ObserveAcquire(source string, waited time.Duration, err error)
+	ObserveComplete(source string, duration time.Duration, err error)
+}
+```
+
+`ObserveAcquire`/`ObserveComplete` bracket `fn`'s execution (acquire
+succeeds → run → complete), which is what lets an Observer track in-flight
+operations, not just their duration afterward. All five methods are called
+synchronously — the same constraint `net/http/httptrace.ClientTrace`'s hooks
+document — so an implementation must not block or do I/O.
+
+`SetObserver` immediately calls `ObserveSourceSnapshot` with every source
+already open, so attaching an Observer after `Open` doesn't leave it
+thinking those sources don't exist — which would otherwise show up later as
+`ObserveSourceRemoved` with no matching registration (a Prometheus
+`sources_active` gauge going negative, for instance). The snapshot is a
+single call, not a replayed `ObserveSourceRegistered` per source, and calling
+`SetObserver` more than once — the same Observer, or a different one — always
+snapshots the current set again rather than re-firing registration events:
+an Observer maintaining a live count should `Set` it from `len(sources)`,
+not increment per element, or repeated `SetObserver` calls inflate it (a
+gauge stuck above the real count, a "registrations" counter that no longer
+means "registrations"). `adapters/prometheus` does exactly this.
+
+Core has no metrics dependency — `Observer` is vendor-neutral for the same
+reason `PoolConfigApplier`/`Closer` are. `adapters/prometheus` is a
+ready-made, comprehensive implementation; wiring it in is one call, and
+every source registration and `Run` after that is automatically recorded:
+
+```go
+import prometheusadapter "github.com/loykin/dbstore/adapters/prometheus"
+
+sql := sqlxadapter.New()
+sql.SetObserver(prometheusadapter.New("myapp_sql", nil)) // nil -> prometheus.DefaultRegisterer
+```
+
+It exposes five metrics per namespace: `throttle_wait_seconds{source,status}`
+and `run_seconds{source,status}` (histograms), `inflight{source}` and
+`sources_active` (gauges), and `source_events_total{event}` (counter,
+`event=registered|removed`). `status` is `ok`, `canceled` (the caller's ctx
+was done — not a backend failure), or `error` (`run_seconds` only — a real
+failure) — kept separate so a spike in one doesn't read as the other; folding
+"my caller gave up" and "the backend broke" into one label would make that
+undebuggable from the metric alone.
+
+Calling `New` again with the same namespace and registry is safe — it
+reuses the already-registered series instead of panicking, so re-running
+setup code (tests, or an app that rebuilds an Adapter) doesn't need to
+special-case metrics. A real name collision with an incompatible metric
+still panics.
+
+Pass an app-owned `*prometheus.Registry` instead of `nil` to share one
+`/metrics` endpoint with the app's own additional metrics — dbstore's series
+live alongside them in the same registry, not a separate one.
+
+The two histograms use OpenTelemetry's recommended
+`db.client.operation.duration` bucket boundaries (`0.001` to `10` seconds),
+not `prometheus.DefBuckets` — `DefBuckets` is documented as tuned for network
+service response times and starts at 5ms, too coarse for local/in-memory
+backends where sub-millisecond calls are routine.
+
+The same `Observer` can be shared across multiple adapters (`sqlxadapter`,
+`restadapter`, ...) — it never sees the backend client type, only a source
+name, durations, and an error. Apps that prefer OpenTelemetry, StatsD, or
+plain logging implement `Observer` themselves instead; nothing about
+`SetObserver` is Prometheus-specific. Combine more than one (e.g. Prometheus
+metrics and a custom audit log) with `dbstore.MultiObserver{a, b}`, which
+fans every call out to each — `SetObserver` itself only holds one. Not
+calling `SetObserver` at all costs nothing — no metrics dependency is even
+loaded unless `adapters/prometheus` is imported. See `examples/prometheus`
+for a full run scraping `/metrics`.
+
 ## Dynamic Sources
 
 Sources can be added and removed at runtime.
@@ -604,6 +689,7 @@ examples/multi_db          multiple named SQL sources
 examples/sqlite_concurrent SQLite concurrency throttling
 examples/config            Config-driven setup spanning SQL and REST sources
 examples/repo_compliance   same repository compliance suite across SQLite and REST
+examples/prometheus        SetObserver wired to Prometheus metrics
 ```
 
 ## Layout
@@ -615,6 +701,7 @@ adapters/sqlx          SQL/sqlx adapter, source, transactions, pool config
 adapters/rest          REST adapter, source, client helpers
 adapters/opensearch    OpenSearch adapter, driver, source alias
 adapters/elasticsearch Elasticsearch adapter, driver, source alias
+adapters/prometheus    Observer implementation backed by Prometheus metrics
 examples               runnable examples
 ```
 

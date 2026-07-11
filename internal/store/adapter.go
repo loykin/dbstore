@@ -14,6 +14,7 @@ type AdapterContract[T any] interface {
 	Open(name string, cfg SourceConfig) error
 	Configure(cfg Config) error
 	Executor() *Executor[T]
+	SetObserver(o Observer)
 	Close()
 }
 
@@ -70,6 +71,14 @@ func (a *Adapter[T]) Configure(cfg Config) error {
 
 func (a *Adapter[T]) Executor() *Executor[T] {
 	return NewExecutor(a.directory)
+}
+
+// SetObserver registers an Observer that every Executor this Adapter has
+// already returned, or will return, notifies on each Run call — Executors
+// read the Directory's Observer at call time, not at construction, so this
+// takes effect immediately, including for Executors obtained earlier.
+func (a *Adapter[T]) SetObserver(o Observer) {
+	a.directory.SetObserver(o)
 }
 
 func (a *Adapter[T]) Close() {

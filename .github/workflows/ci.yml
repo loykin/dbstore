@@ -101,6 +101,10 @@ jobs:
         working-directory: examples/repo_compliance
         run: go test ./... && go run .
 
+      - name: Test prometheus
+        working-directory: examples/prometheus
+        run: go test ./... && go run .
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
