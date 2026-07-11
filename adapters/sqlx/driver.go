@@ -2,6 +2,7 @@ package sqlxadapter
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/loykin/dbstore"
@@ -64,7 +65,24 @@ func (d Driver) ApplyPoolConfig(db *sqlx.DB, cfg dbstore.PoolConfig) {
 }
 
 // ApplyPoolConfig applies dbstore.PoolConfig to a sqlx database pool.
+//
+// MaxOpenConns and MaxConcurrency are two independent concurrency limits —
+// database/sql's connection pool and dbstore's per-source throttle — stacked
+// on top of each other. If MaxOpenConns is smaller, requests that already
+// cleared the throttle can still queue invisibly inside database/sql waiting
+// for a free connection, which makes a ctx.Done() timeout ambiguous: was it
+// waiting on the throttle or on the pool? Keeping MaxOpenConns comfortably at
+// or above MaxConcurrency keeps the throttle as the one place that ever
+// blocks, so that's always where a timeout points. See DefaultPoolConfig
+// (10 vs 5) for the ratio this package assumes.
 func ApplyPoolConfig(db *sqlx.DB, cfg dbstore.PoolConfig) {
+	if cfg.MaxOpenConns > 0 && cfg.MaxConcurrency > 0 && cfg.MaxOpenConns < cfg.MaxConcurrency {
+		log.Printf("dbstore/sqlxadapter: MaxOpenConns (%d) is less than MaxConcurrency (%d) — "+
+			"requests that clear the throttle may still queue inside database/sql's pool, "+
+			"making ctx timeouts ambiguous. Set MaxOpenConns >= MaxConcurrency.",
+			cfg.MaxOpenConns, cfg.MaxConcurrency)
+	}
+
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
 	db.SetConnMaxLifetime(cfg.MaxLifetime)

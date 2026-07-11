@@ -23,6 +23,14 @@ type Config struct {
 // and those four fields go unused. MaxConcurrency is the exception:
 // Directory[T] applies it directly via Throttle regardless of driver, so it's the only
 // field every backend actually respects.
+//
+// For SQL backends, MaxOpenConns and MaxConcurrency are two independent
+// concurrency limits stacked on top of each other (database/sql's pool, and
+// dbstore's throttle). Keep MaxOpenConns >= MaxConcurrency so the throttle is
+// always the one place that can block — otherwise a request that already
+// cleared the throttle can still queue invisibly inside database/sql's pool,
+// and a ctx timeout no longer tells you which layer it happened in.
+// sqlxadapter.ApplyPoolConfig logs a warning when this ratio is violated.
 type PoolConfig struct {
 	MaxOpenConns   int           `json:"maxOpenConns,omitempty" yaml:"maxOpenConns,omitempty"`
 	MaxIdleConns   int           `json:"maxIdleConns,omitempty" yaml:"maxIdleConns,omitempty"`

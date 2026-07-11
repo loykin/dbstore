@@ -564,6 +564,20 @@ sql.Open("meta", dbstore.SourceConfig{
 })
 ```
 
+## Pool Size vs Throttle
+
+For SQL backends, `MaxOpenConns` (database/sql's connection pool) and
+`MaxConcurrency` (dbstore's per-source throttle) are two independent
+concurrency limits stacked on top of each other. If `MaxOpenConns` is
+smaller, a request that already cleared the throttle can still queue
+invisibly inside database/sql waiting for a free connection — so a `ctx`
+timeout no longer tells you which layer it happened in.
+
+Keep `MaxOpenConns >= MaxConcurrency` so the throttle is always the one place
+that can block, and a timeout always points there. `DefaultPoolConfig` (10
+vs 5) and the SQLite example above (1 vs 1) both follow this ratio.
+`sqlxadapter.ApplyPoolConfig` logs a warning when it's violated.
+
 ## Dynamic Sources
 
 Sources can be added and removed at runtime.
@@ -603,3 +617,51 @@ adapters/opensearch    OpenSearch adapter, driver, source alias
 adapters/elasticsearch Elasticsearch adapter, driver, source alias
 examples               runnable examples
 ```
+
+## FAQ
+
+**How do I run operations across two repositories in one transaction?**
+
+dbstore doesn't provide this — `Source.Run`/`RunTx` only ever expose a client
+inside their own callback, with no way to pull a `*sqlx.Tx` out and hand it
+to a second repository. That's intentional: dbstore stops at lifecycle and
+scoped access, and cross-repository transaction coordination is operation
+semantics, which it deliberately leaves to the application (see "Why").
+
+The fix doesn't need any new dbstore code, though — it needs repository
+methods written against `sqlx.ExtContext` (satisfied by both `*sqlx.DB` and
+`*sqlx.Tx`) instead of a concrete `*sqlx.DB`, so the same method works
+whether it's called through `Source.Run` (normal case) or handed a
+use-case-level `*sqlx.Tx` directly (cross-repository case):
+
+```go
+// The real logic takes sqlx.ExtContext — either a *sqlx.DB or a *sqlx.Tx.
+func (r *userRepo) createWith(ctx context.Context, ext sqlx.ExtContext, name string) error {
+	_, err := ext.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, name)
+	return err
+}
+
+// Normal path: Source.Run hands it a *sqlx.DB.
+func (r *userRepo) Create(ctx context.Context, name string) error {
+	return r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
+		return r.createWith(ctx, db, name)
+	})
+}
+
+// Cross-repository path: a use case gets a *sqlx.Tx from sqlxadapter.RunTx
+// and passes it directly into both repositories' "with" methods, bypassing
+// Source.Run for this one call so both writes share one transaction.
+func (uc *signupUseCase) RegisterUser(ctx context.Context, name string) error {
+	return sqlxadapter.RunTx(uc.exec, ctx, "primary", func(ctx context.Context, tx *sqlx.Tx) error {
+		if err := uc.users.createWith(ctx, tx, name); err != nil {
+			return err
+		}
+		return uc.accounts.grantWith(ctx, tx, name, 100)
+	})
+}
+```
+
+This only works within one named SQL source — a `*sqlx.Tx` belongs to one
+`*sqlx.DB`, so it can't span two different named sources (e.g. `"primary"`
+and `"replica"`), let alone SQL and REST. That's a limit of SQL transactions
+themselves, not something dbstore could paper over.
