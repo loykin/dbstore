@@ -160,9 +160,8 @@ func main() {
 	sql.RegisterDefaultDrivers()
 	defer sql.Close()
 
-	// MaxOpenConns: 1 matters here — sqlite's ":memory:" DSN gives every new
-	// connection its own private database, so a pool of more than one
-	// connection would make Create's write invisible to FindByID's read.
+	// MaxOpenConns: 1 — ":memory:" SQLite gives each connection its own
+	// private database (see "SQLite" below).
 	if err := sql.Open("primary", dbstore.SourceConfig{
 		Driver: sqlxadapter.DriverSQLite,
 		DSN:    ":memory:",
@@ -178,8 +177,8 @@ func main() {
 	exec := sql.Executor()
 	ctx := context.Background()
 
-	// Schema setup is not part of the repository contract, so it stays a
-	// direct Executor.Run call — the lower-level primitive Source.Run wraps.
+	// Schema setup uses Executor.Run directly — Source.Run (below) is the
+	// app-facing wrapper repository code normally uses instead.
 	if err := exec.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error {
 		_, err := db.ExecContext(ctx, `CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)`)
 		return err
@@ -208,14 +207,17 @@ No external database needed — `:memory:` SQLite runs this as-is (see
 
 The Quick Start code above builds this chain, bottom-up:
 
-```text
-DriverBuilder[T]         RegisterDriver — knows how to open one T from a SourceConfig
-  -> Adapter[T]           Open — registers and connects a named source
-  -> Directory[T]          (lifecycle + per-source concurrency throttle)
-  -> Executor[T]          Executor — scoped, throttled access to a named client
-  -> Source[T]            embedded in a repository for a Run method
-  -> Repository Implementation
-  -> Repository Interface
+```mermaid
+flowchart TD
+    A["DriverBuilder[T]<br/>RegisterDriver — opens one T from a SourceConfig"]
+    B["Adapter[T]<br/>Open — registers and connects a named source"]
+    C["Directory[T]<br/>lifecycle + per-source concurrency throttle"]
+    D["Executor[T]<br/>scoped, throttled access to a named client"]
+    E["Source[T]<br/>embedded in a repository for a Run method"]
+    F[Repository Implementation]
+    G[Repository Interface]
+
+    A --> B --> C --> D --> E --> F --> G
 ```
 
 The application owns repository interfaces, repository implementations, and
@@ -227,7 +229,22 @@ drivers — builds on this same shape.
 ## Guarantees
 
 These are the concrete promises the chain above makes — verified by tests in
-`internal/store` (including under `-race`), not just asserted here:
+`internal/store` (including under `-race`), not just asserted here. Each one
+is one line; expand for the precise semantics.
+
+- **Visibility** — a source is visible only once `Open` succeeds.
+- **Safe removal** — no new `Run` starts against a name after `Remove`
+  returns; in-flight `Run`s finish first.
+- **No double-open** — concurrent opens of the same name: exactly one wins.
+- **`Configure` is not atomic** — sequential publish with best-effort
+  rollback, not all-or-nothing.
+- **An Observer can't crash the operation it's observing** — a panic in an
+  Observer method is recovered and discarded.
+- **An Observer must not call back into the same `Directory`** — that
+  reenters a non-reentrant lock and panics on purpose rather than hanging.
+
+<details>
+<summary>Precise semantics</summary>
 
 - **Visibility** — a source becomes visible to `Executor.Run`, and to
   `Open`'s duplicate-name check, only once its driver's `Open` call
@@ -257,6 +274,8 @@ These are the concrete promises the chain above makes — verified by tests in
   not ordinary contention, and self-deadlocks the lock that orders callback
   delivery. dbstore detects this and panics immediately instead of hanging
   forever; do that work from a separate goroutine instead.
+
+</details>
 
 `MaxConcurrency <= 0` means unthrottled — `Run` calls proceed without
 waiting, same as if `PoolConfig` were never set. It does not block every
