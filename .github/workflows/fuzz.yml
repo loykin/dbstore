@@ -19,8 +19,8 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - FuzzPool_Register
-          - FuzzPool_AcquireRelease
+          - FuzzDirectory_Register
+          - FuzzDirectory_AcquireRelease
           - FuzzExecutor_Run
           - FuzzThrottle_Concurrency
     steps:
@@ -60,10 +60,10 @@ jobs:
         env:
           DBSTORE_CHAOS_TEST: "1"
           DBSTORE_CHAOS_DURATION: "5m"
-        run: go test -v -run=TestPool_Chaos_GoroutineLeaks -timeout=600s ./internal/store/
+        run: go test -v -run=TestDirectory_Chaos_GoroutineLeaks -timeout=600s ./internal/store/
 
       - name: Memory stability
         env:
           DBSTORE_CHAOS_TEST: "1"
           DBSTORE_CHAOS_DURATION: "5m"
-        run: go test -v -run=TestPool_Chaos_MemoryStability -timeout=600s ./internal/store/
+        run: go test -v -run=TestDirectory_Chaos_MemoryStability -timeout=600s ./internal/store/
