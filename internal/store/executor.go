@@ -36,12 +36,12 @@ func (e *Executor[T]) Run(ctx context.Context, name string, fn func(context.Cont
 	waitStart := time.Now()
 	if throttleErr := entry.throttle.Acquire(ctx); throttleErr != nil {
 		if observer != nil {
-			safeObserve(func() { observer.ObserveAcquire(name, time.Since(waitStart), throttleErr) })
+			e.directory.observe(func() { observer.ObserveAcquire(name, time.Since(waitStart), throttleErr) })
 		}
 		return throttleErr
 	}
 	if observer != nil {
-		safeObserve(func() { observer.ObserveAcquire(name, time.Since(waitStart), nil) })
+		e.directory.observe(func() { observer.ObserveAcquire(name, time.Since(waitStart), nil) })
 	}
 	defer entry.throttle.Release()
 
@@ -49,10 +49,10 @@ func (e *Executor[T]) Run(ctx context.Context, name string, fn func(context.Cont
 	if observer != nil {
 		defer func() {
 			if r := recover(); r != nil {
-				safeObserve(func() { observer.ObserveComplete(name, time.Since(runStart), fmt.Errorf("panic: %v", r)) })
+				e.directory.observe(func() { observer.ObserveComplete(name, time.Since(runStart), fmt.Errorf("panic: %v", r)) })
 				panic(r)
 			}
-			safeObserve(func() { observer.ObserveComplete(name, time.Since(runStart), err) })
+			e.directory.observe(func() { observer.ObserveComplete(name, time.Since(runStart), err) })
 		}()
 	}
 	err = fn(ctx, entry.client)

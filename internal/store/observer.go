@@ -20,9 +20,10 @@ import "time"
 // In particular, an implementation must not call back into
 // Register/Remove/RemoveAll/SetObserver on the same Directory from inside
 // any of these methods: that's a same-goroutine reentrancy, not ordinary
-// cross-goroutine contention, and dbstore panics immediately when it
-// detects one (see observerLock) rather than let it hang forever. Do that
-// work from a separate goroutine instead.
+// cross-goroutine contention, and dbstore panics before lifecycle state
+// changes when it detects one (see observerCallbackGuard) rather than let it
+// hang forever or leave a partial mutation behind. Do that work from a
+// separate goroutine instead.
 //
 // Unlike httptrace, a panicking Observer method does not crash the call that
 // triggered it: dbstore recovers around every Observer invocation (see

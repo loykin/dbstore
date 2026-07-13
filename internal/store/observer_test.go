@@ -303,7 +303,7 @@ func TestDirectory_ObserverPanicDoesNotCrashOrDeadlockRegister(t *testing.T) {
 
 // reentrantIntoRegisterObserver calls back into Register on the same
 // Directory from inside ObserveSourceRegistered — the self-deadlock
-// observerLock exists to catch. It recovers that panic itself (rather than
+// observerCallbackGuard exists to catch. It recovers that panic itself (rather than
 // letting it reach the outer safeObserve) so the test can inspect it.
 type reentrantIntoRegisterObserver struct {
 	dir       *Directory[*sqlx.DB]
@@ -349,6 +349,8 @@ func TestDirectory_ObserverReentrancyIntoRegisterPanicsInsteadOfHanging(t *testi
 	// ...but the outer Register("first") call that triggered it still
 	// succeeds, per Observer's documented panic-safety contract.
 	require.NoError(t, registerErr)
+	_, err := pool.get("second")
+	require.Error(t, err, "a rejected reentrant Register must not publish its source")
 
 	// Neither mu nor observerMu leaked locked: the Directory is still fully
 	// usable afterward.
@@ -395,9 +397,99 @@ func TestDirectory_ObserverReentrancyIntoSetObserverPanicsInsteadOfHanging(t *te
 
 	require.NotNil(t, obs.recovered, "expected the reentrant nested SetObserver call to panic")
 	require.Contains(t, fmt.Sprint(obs.recovered), "called back into")
+	require.Same(t, obs, pool.getObserver(), "a rejected reentrant SetObserver must not replace the observer")
 
 	// The Directory is still fully usable afterward.
 	require.NoError(t, pool.Register("primary", testConfig(":memory:")))
+}
+
+// reentrantRemoveObserver verifies that lifecycle reentry is rejected before
+// Remove deletes the entry. Before observerCallbackGuard, the entry was removed
+// first and the late observerLock panic skipped both draining and closing it.
+type reentrantRemoveObserver struct {
+	dir       *Directory[*sqlx.DB]
+	recovered any
+}
+
+func (r *reentrantRemoveObserver) ObserveSourceSnapshot([]string) {}
+func (r *reentrantRemoveObserver) ObserveSourceRegistered(source string) {
+	defer func() { r.recovered = recover() }()
+	_ = r.dir.Remove(source)
+}
+func (r *reentrantRemoveObserver) ObserveSourceRemoved(string)                  {}
+func (r *reentrantRemoveObserver) ObserveAcquire(string, time.Duration, error)  {}
+func (r *reentrantRemoveObserver) ObserveComplete(string, time.Duration, error) {}
+
+func TestDirectory_ObserverReentrancyIntoRemoveDoesNotDeleteSource(t *testing.T) {
+	pool := newTestDirectory()
+	defer pool.RemoveAll()
+
+	obs := &reentrantRemoveObserver{dir: pool}
+	pool.SetObserver(obs)
+	require.NoError(t, pool.Register("primary", testConfig(":memory:")))
+
+	require.NotNil(t, obs.recovered)
+	require.Contains(t, fmt.Sprint(obs.recovered), "called back into")
+	_, err := pool.get("primary")
+	require.NoError(t, err, "a rejected reentrant Remove must leave the source registered")
+}
+
+// reentrantRunObserver covers Run callbacks, which do not hold observerMu.
+// A Remove from ObserveAcquire/ObserveComplete used to wait for the very Run
+// executing the callback and deadlock without reaching observerLock.
+type reentrantRunObserver struct {
+	dir       *Directory[*sqlx.DB]
+	phase     string
+	recovered any
+}
+
+func (r *reentrantRunObserver) ObserveSourceSnapshot([]string) {}
+func (r *reentrantRunObserver) ObserveSourceRegistered(string) {}
+func (r *reentrantRunObserver) ObserveSourceRemoved(string)    {}
+func (r *reentrantRunObserver) ObserveAcquire(source string, _ time.Duration, err error) {
+	if r.phase != "acquire" || err != nil {
+		return
+	}
+	defer func() { r.recovered = recover() }()
+	_ = r.dir.Remove(source)
+}
+func (r *reentrantRunObserver) ObserveComplete(source string, _ time.Duration, _ error) {
+	if r.phase != "complete" {
+		return
+	}
+	defer func() { r.recovered = recover() }()
+	_ = r.dir.Remove(source)
+}
+
+func TestExecutor_ObserverRunCallbackReentrancyPanicsInsteadOfHanging(t *testing.T) {
+	for _, phase := range []string{"acquire", "complete"} {
+		t.Run(phase, func(t *testing.T) {
+			pool := newTestDirectory()
+			defer pool.RemoveAll()
+			require.NoError(t, pool.Register("primary", testConfig(":memory:")))
+
+			obs := &reentrantRunObserver{dir: pool, phase: phase}
+			pool.SetObserver(obs)
+			done := make(chan error, 1)
+			go func() {
+				done <- NewExecutor(pool).Run(context.Background(), "primary", func(context.Context, *sqlx.DB) error {
+					return nil
+				})
+			}()
+
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(2 * time.Second):
+				t.Fatal("DEADLOCK: Run Observer callback reentering Remove hung")
+			}
+
+			require.NotNil(t, obs.recovered)
+			require.Contains(t, fmt.Sprint(obs.recovered), "called back into")
+			_, err := pool.get("primary")
+			require.NoError(t, err, "a rejected reentrant Remove must leave the source registered")
+		})
+	}
 }
 
 // TestDirectory_ConcurrentRegisterWithObserverNeverFalsePositives proves the

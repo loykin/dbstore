@@ -65,11 +65,12 @@ a plain `sync.Mutex` — see `observer_lock.go`) orders Observer callback
 delivery to match mutation order. `beginObserverHandoff()` is the single
 choke point all four mutating methods (`Register`/`Remove`/`RemoveAll`/
 `SetObserver`) go through to hand off from `mu` to `observerMu` without
-leaking either lock if the handoff panics. `observerLock` also detects and
-panics on same-goroutine reentrancy — an Observer callback calling back
-into the same `Directory` — instead of silently deadlocking. See the doc
-comments on the `observerMu` field, `beginObserverHandoff`, and
-`observer_lock.go` for the reasoning before changing any of this.
+leaking either lock if the handoff panics. `observerCallbackGuard` rejects
+same-goroutine reentrancy before lifecycle state changes — including from
+`ObserveAcquire`/`ObserveComplete`, which do not hold `observerMu` — while
+`observerLock` retains a defensive lock-level check. See the doc comments on
+the `observerMu` field, `beginObserverHandoff`, and `observer_lock.go` for
+the reasoning before changing any of this.
 
 ### Adapters vs. Observer
 

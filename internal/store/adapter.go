@@ -43,7 +43,8 @@ func (a *Adapter[T]) RegisterDriver(name string, driver DriverBuilder[T]) {
 // a fixed identifier repository code already references (e.g. via
 // Executor.Run), not a value that should vary with environment config. For
 // opening several sources at once, see Configure, where the same name
-// lives as the map key instead of a positional argument.
+// lives as the map key instead of a positional argument. An empty name is
+// rejected consistently by both Open and Configure.
 func (a *Adapter[T]) Open(name string, cfg SourceConfig) error {
 	return a.directory.Register(name, cfg)
 }

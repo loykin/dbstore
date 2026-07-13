@@ -28,15 +28,19 @@ type Directory[T any] struct {
 	driver   *DriverRegistry[T]
 	observer Observer
 
-	// observerMu orders Observer callback invocations to match the order
+	// observerMu orders lifecycle Observer callback invocations to match the order
 	// their data mutations were linearized by mu — see SetObserver's doc
 	// comment for why a second lock is needed for this at all, instead of
 	// just capturing data under mu and calling back outside it. It is an
-	// observerLock, not a plain sync.Mutex, so that an Observer callback
-	// reentering Register/Remove/RemoveAll/SetObserver on this Directory
-	// panics immediately instead of self-deadlocking — see observerLock's
-	// doc comment.
+	// observerLock, not a plain sync.Mutex, as a defensive check against
+	// reentrancy at lock acquisition. observerCallbacks below performs the
+	// primary check before lifecycle state changes.
 	observerMu observerLock
+
+	// observerCallbacks rejects same-goroutine lifecycle reentry before any
+	// state mutation. observerMu alone cannot do that for ObserveAcquire or
+	// ObserveComplete because Run callbacks are intentionally not serialized.
+	observerCallbacks observerCallbackGuard
 }
 
 // SetObserver registers an Observer to receive Executor[T].Run timing and
@@ -73,6 +77,7 @@ type Directory[T any] struct {
 // callback order always matches mutation order — the property the comment
 // on Register/Remove/RemoveAll's own observerMu use depends on.
 func (p *Directory[T]) SetObserver(o Observer) {
+	p.observerCallbacks.panicIfActive()
 	p.mu.Lock()
 	p.observer = o
 	var names []string
@@ -86,8 +91,18 @@ func (p *Directory[T]) SetObserver(o Observer) {
 	defer p.observerMu.Unlock()
 
 	if o != nil {
-		safeObserve(func() { o.ObserveSourceSnapshot(names) })
+		p.observe(func() { o.ObserveSourceSnapshot(names) })
 	}
+}
+
+// observe invokes one Observer method while marking the current goroutine as
+// inside a callback for this Directory. Lifecycle methods use that marker to
+// reject same-goroutine reentry before changing state. safeObserve still owns
+// panic isolation: an Observer bug must not fail the operation being observed.
+func (p *Directory[T]) observe(fn func()) {
+	exit := p.observerCallbacks.enter()
+	defer exit()
+	safeObserve(fn)
 }
 
 // beginObserverHandoff acquires observerMu and releases mu — the "ticket"
@@ -123,9 +138,13 @@ func NewDirectory[T any](registry *DriverRegistry[T]) *Directory[T] {
 	}
 }
 
-// Register adds a datasource by name and initializes its client.
+// Register adds a non-empty datasource name and initializes its client.
 // TCP connection (including Ping) is performed outside the mutex to avoid lock contention.
 func (p *Directory[T]) Register(name string, cfg SourceConfig) error {
+	p.observerCallbacks.panicIfActive()
+	if name == "" {
+		return fmt.Errorf("dbstore: source name is required")
+	}
 	p.mu.Lock()
 	if _, exists := p.entries[name]; exists {
 		p.mu.Unlock()
@@ -158,7 +177,7 @@ func (p *Directory[T]) Register(name string, cfg SourceConfig) error {
 	defer p.observerMu.Unlock()
 
 	if observer != nil {
-		safeObserve(func() { observer.ObserveSourceRegistered(name) })
+		p.observe(func() { observer.ObserveSourceRegistered(name) })
 	}
 	return nil
 }
@@ -166,6 +185,7 @@ func (p *Directory[T]) Register(name string, cfg SourceConfig) error {
 // Remove unregisters a datasource and closes its client when supported.
 // Waits for all in-flight operations to complete before closing.
 func (p *Directory[T]) Remove(name string) error {
+	p.observerCallbacks.panicIfActive()
 	p.mu.Lock()
 	entry, ok := p.entries[name]
 	if !ok {
@@ -189,6 +209,7 @@ func (p *Directory[T]) Remove(name string) error {
 
 // RemoveAll removes all registered datasources; call on server shutdown.
 func (p *Directory[T]) RemoveAll() {
+	p.observerCallbacks.panicIfActive()
 	p.mu.Lock()
 	entries := p.entries
 	p.entries = make(map[string]*directoryEntry[T])
@@ -220,7 +241,7 @@ func (p *Directory[T]) notifyRemoved(observer Observer, names ...string) {
 		return
 	}
 	for _, name := range names {
-		safeObserve(func() { observer.ObserveSourceRemoved(name) })
+		p.observe(func() { observer.ObserveSourceRemoved(name) })
 	}
 }
 

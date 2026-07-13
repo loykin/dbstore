@@ -51,6 +51,15 @@ func TestDirectory_Register_UnknownDriver(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestDirectory_Register_RequiresName(t *testing.T) {
+	pool := newTestDirectory()
+	defer pool.RemoveAll()
+
+	err := pool.Register("", testConfig(":memory:"))
+	require.Error(t, err)
+	require.ErrorContains(t, err, "source name is required")
+}
+
 func TestDirectory_Remove(t *testing.T) {
 	pool := newTestDirectory()
 

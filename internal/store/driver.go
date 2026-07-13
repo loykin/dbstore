@@ -1,6 +1,9 @@
 package store
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 // DriverBuilder opens a new client of type T from cfg.
 type DriverBuilder[T any] interface {
@@ -15,6 +18,7 @@ type PoolConfigApplier[T any] interface {
 }
 
 type DriverRegistry[T any] struct {
+	mu       sync.RWMutex
 	builders map[string]DriverBuilder[T]
 }
 
@@ -23,14 +27,18 @@ func NewDriverRegistry[T any]() *DriverRegistry[T] {
 }
 
 func (r *DriverRegistry[T]) Register(name string, b DriverBuilder[T]) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.builders[name] = b
 }
 
 func (r *DriverRegistry[T]) open(cfg SourceConfig) (T, error) {
 	var zero T
+	r.mu.RLock()
 	b, ok := r.builders[cfg.Driver]
+	r.mu.RUnlock()
 	if !ok {
-		return zero, fmt.Errorf("dspool: unknown driver %q", cfg.Driver)
+		return zero, fmt.Errorf("dbstore: unknown driver %q", cfg.Driver)
 	}
 	client, err := b.Open(cfg)
 	if err != nil {

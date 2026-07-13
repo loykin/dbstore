@@ -13,10 +13,51 @@ import (
 // as a constant so tests can match on it without duplicating the wording.
 const reentrantObserverPanic = "dbstore: an Observer callback called back into " +
 	"Register/Remove/RemoveAll/SetObserver on the same Directory it was " +
-	"triggered from — this self-deadlocks (observerMu is not reentrant), so " +
-	"dbstore panics here instead of hanging forever. Do the reentrant work " +
+	"triggered from — this can self-deadlock or partially mutate lifecycle " +
+	"state, so dbstore panics before changing that state. Do the reentrant work " +
 	"from a separate goroutine (e.g. send it over a channel) instead of " +
 	"calling back into the Directory synchronously from inside the callback."
+
+// observerCallbackGuard records which goroutines are currently executing an
+// Observer callback for one Directory. Lifecycle methods consult it before
+// touching state, so reentry is rejected before Register inserts an entry,
+// Remove deletes one, or RemoveAll swaps the map. It also covers Run callbacks,
+// which do not hold observerMu but can otherwise self-deadlock by calling Remove
+// while their own in-flight count is still active.
+type observerCallbackGuard struct {
+	mu     sync.Mutex
+	active map[int64]int
+}
+
+func (g *observerCallbackGuard) enter() func() {
+	gid := currentGoroutineID()
+	g.mu.Lock()
+	if g.active == nil {
+		g.active = make(map[int64]int)
+	}
+	g.active[gid]++
+	g.mu.Unlock()
+
+	return func() {
+		g.mu.Lock()
+		if g.active[gid] == 1 {
+			delete(g.active, gid)
+		} else {
+			g.active[gid]--
+		}
+		g.mu.Unlock()
+	}
+}
+
+func (g *observerCallbackGuard) panicIfActive() {
+	gid := currentGoroutineID()
+	g.mu.Lock()
+	active := g.active[gid] > 0
+	g.mu.Unlock()
+	if active {
+		panic(reentrantObserverPanic)
+	}
+}
 
 // observerLock is sync.Mutex plus self-reentrancy detection. It exists
 // because observerMu (see Directory's field doc) must stay locked for the
@@ -58,10 +99,10 @@ func (l *observerLock) Unlock() {
 // for this in Go, which deliberately does not expose goroutine ids through
 // any supported API — the runtime treats them as an implementation detail,
 // not an identity applications should build on for anything long-lived.
-// Its use here is intentionally narrow: the id is read and compared within
-// a single, short-lived critical section (one observerLock.Lock/Unlock
-// pair) purely to detect same-goroutine reentrancy, never stored or
-// compared across a longer window where goroutine id reuse could matter.
+// Its use here is intentionally narrow: the id is retained only for the
+// duration of one Observer callback or observerLock critical section, purely
+// to detect immediate same-goroutine reentrancy. It is never treated as a
+// long-lived application identity where goroutine id reuse could matter.
 func currentGoroutineID() int64 {
 	buf := make([]byte, 64)
 	buf = buf[:runtime.Stack(buf, false)]

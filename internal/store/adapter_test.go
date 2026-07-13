@@ -64,6 +64,16 @@ func TestAdapter_ConfigureRequiresSourceName(t *testing.T) {
 	require.ErrorContains(t, err, "configure source: name is required")
 }
 
+func TestAdapter_OpenRequiresSourceName(t *testing.T) {
+	adapter := NewAdapter[*sqlx.DB]()
+	adapter.RegisterDriver("sqlite", &sqliteDriver{})
+	defer adapter.Close()
+
+	err := adapter.Open("", testConfig(":memory:"))
+	require.Error(t, err)
+	require.ErrorContains(t, err, "source name is required")
+}
+
 func TestAdapter_ConfigureRollsBackOnMidListFailure(t *testing.T) {
 	adapter := NewAdapter[*sqlx.DB]()
 	adapter.RegisterDriver("sqlite", &sqliteDriver{})
