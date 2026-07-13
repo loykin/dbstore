@@ -291,10 +291,82 @@ github.com/loykin/dbstore/adapters/opensearch    OpenSearch adapter
 github.com/loykin/dbstore/adapters/elasticsearch Elasticsearch adapter
 github.com/loykin/dbstore/adapters/prometheus    Prometheus dbstore.Observer
 github.com/loykin/dbstore/dbstoretest            compliance-suite-per-fixture test helper
+github.com/loykin/dbstore/mcpserver              embeddable MCP server for SQL sources
+github.com/loykin/dbstore/cmd/dbstore-mcp        ready-to-run MCP STDIO server
 ```
 
 The root package has no SQL or REST dependency. Backend-specific helpers live
 under `adapters/`.
+
+## MCP Server
+
+`mcpserver` exposes an existing `sqlxadapter.Adapter` through the official
+Model Context Protocol Go SDK. The caller retains ownership of the Adapter:
+embedding the server in an application shares that application's real
+connection pools, throttles, and in-flight lifecycle guarantees.
+
+```go
+server, err := mcpserver.New(mcpserver.Options{
+	Store: sqlAdapter,
+})
+if err != nil {
+	log.Fatal(err)
+}
+if err := server.ServeStdio(ctx); err != nil {
+	log.Fatal(err)
+}
+```
+
+The default policy is inspection-only. It provides:
+
+- `db_list_sources` — redacted source metadata, never DSNs
+- `db_ping` — connectivity and `database/sql` pool statistics
+- `db_list_tables` and `db_describe_table` — SQLite/PostgreSQL/MySQL schema inspection
+- `db_query` — one row- and byte-bounded `SELECT`, executed through
+  `Executor.Run`; denied until the Policy explicitly enables it
+- `db_remove_source` — added only with `EnableManagement`, then
+  still denied by the default policy
+
+Source registration is added only with `EnableManagement` and a
+`SourceConfigResolver`. The Store itself must implement `SourceManager`,
+ensuring lifecycle operations target the same registry used for queries. The
+MCP caller sends an opaque `configRef`, not a DSN or password. A custom
+`Policy` must authorize management operations.
+
+```go
+server, err := mcpserver.New(mcpserver.Options{
+	Store:            sqlAdapter,
+	EnableManagement: true,
+	Policy:           appPolicy,
+	SourceResolver:   mcpserver.SourceConfigResolverFunc(
+		func(ctx context.Context, ref string) (dbstore.SourceConfig, error) {
+			return secretManager.ResolveDatabaseConfig(ctx, ref)
+		},
+	),
+})
+```
+
+The package's SELECT validation, timeouts, row limits, and encoded-result byte
+limits are defense in depth, not a SQL security boundary. `SELECT` can invoke
+database functions with side effects, so query access is opt-in and its MCP
+annotation is deliberately not marked read-only. Deploy MCP-accessible sources
+with narrowly granted database credentials and use `Policy` for caller/source
+authorization.
+
+### Ready-to-run binary
+
+```bash
+go install github.com/loykin/dbstore/cmd/dbstore-mcp@latest
+
+DBSTORE_MCP_DSN='file:dbstore.db' \
+  dbstore-mcp -driver sqlite -source primary -allow-query
+```
+
+The binary uses STDIO and does not accept a DSN flag, avoiding command-line
+credential exposure. With `-allow-manage`, a registration `configRef` such
+as `ANALYTICS` resolves only from
+`DBSTORE_MCP_SOURCE_ANALYTICS='{"driver":"postgres","dsn":"..."}'`.
+Use the embeddable package with a real secret manager for production.
 
 ## Core Concepts
 

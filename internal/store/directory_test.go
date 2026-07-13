@@ -91,6 +91,24 @@ func TestDirectory_RemoveAll(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestDirectory_SourcesReturnsSortedRedactedMetadata(t *testing.T) {
+	pool := newTestDirectory()
+	defer pool.RemoveAll()
+
+	first := testConfig("file:first?mode=memory&cache=shared")
+	first.PoolConfig.MaxConcurrency = 3
+	require.NoError(t, pool.Register("zeta", first))
+	require.NoError(t, pool.Register("alpha", testConfig("file:alpha?mode=memory&cache=shared")))
+
+	sources := pool.Sources()
+	require.Len(t, sources, 2)
+	assert.Equal(t, "alpha", sources[0].Name)
+	assert.Equal(t, "sqlite", sources[0].Driver)
+	assert.False(t, sources[0].CreatedAt.IsZero())
+	assert.Equal(t, "zeta", sources[1].Name)
+	assert.Equal(t, 3, sources[1].MaxConcurrency)
+}
+
 func TestDirectory_Get_AfterRemove(t *testing.T) {
 	pool := newTestDirectory()
 

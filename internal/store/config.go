@@ -16,6 +16,16 @@ type Config struct {
 	Sources map[string]SourceConfig `json:"sources" yaml:"sources"`
 }
 
+// SourceInfo is a redacted snapshot of one registered source. It deliberately
+// excludes the DSN and all driver-specific client state so callers can expose
+// it through diagnostics or management APIs without leaking credentials.
+type SourceInfo struct {
+	Name           string    `json:"name"`
+	Driver         string    `json:"driver"`
+	CreatedAt      time.Time `json:"createdAt"`
+	MaxConcurrency int       `json:"maxConcurrency"`
+}
+
 // PoolConfig configures both the SQL connection pool and the per-datasource
 // throttle. MaxOpenConns/MaxIdleConns/MaxLifetime/MaxIdleTime only take
 // effect if the driver implements PoolConfigApplier[T] (see driver.go) —

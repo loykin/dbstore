@@ -88,6 +88,16 @@ Keeping it separate keeps `testing` out of the import graph of every
 production binary depending on `dbstore` — same reasoning as
 `net/http/httptest`.
 
+### MCP is an embeddable package plus a thin binary
+
+`mcpserver` is a public library that exposes a caller-owned
+`sqlxadapter.Adapter` over MCP; it must not close that Adapter. All SQL work
+goes through `Executor.Run` so the core throttle and removal guarantees still
+apply. `cmd/dbstore-mcp` only owns process configuration, default SQL driver
+imports, and STDIO startup. Keep reusable MCP tools, policy, credential
+reference resolution interfaces, and tests in `mcpserver`, not under `cmd`.
+MCP responses must never include a source DSN or credential.
+
 ### Examples are independent Go modules
 
 Every directory under `examples/` has its own `go.mod` with

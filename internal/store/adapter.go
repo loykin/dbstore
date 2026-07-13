@@ -14,6 +14,7 @@ type AdapterContract[T any] interface {
 	Open(name string, cfg SourceConfig) error
 	Configure(cfg Config) error
 	Remove(name string) error
+	Sources() []SourceInfo
 	Executor() *Executor[T]
 	SetObserver(o Observer)
 	Close()
@@ -84,6 +85,11 @@ func (a *Adapter[T]) Configure(cfg Config) error {
 // once opened, since Open only ever adds.
 func (a *Adapter[T]) Remove(name string) error {
 	return a.directory.Remove(name)
+}
+
+// Sources returns redacted metadata for every currently registered source.
+func (a *Adapter[T]) Sources() []SourceInfo {
+	return a.directory.Sources()
 }
 
 func (a *Adapter[T]) Executor() *Executor[T] {

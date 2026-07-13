@@ -32,6 +32,10 @@ func (a *Adapter) Remove(name string) error {
 	return a.core.Remove(name)
 }
 
+func (a *Adapter) Sources() []dbstore.SourceInfo {
+	return a.core.Sources()
+}
+
 func (a *Adapter) Executor() *dbstore.Executor[*opensearchapi.Client] {
 	return a.core.Executor()
 }

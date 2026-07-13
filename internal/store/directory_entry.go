@@ -6,8 +6,10 @@ import (
 )
 
 type directoryEntry[T any] struct {
-	client    T
-	throttle  *Throttle
-	createdAt time.Time
-	wg        sync.WaitGroup // tracks in-flight operation count
+	client         T
+	driver         string
+	throttle       *Throttle
+	maxConcurrency int
+	createdAt      time.Time
+	wg             sync.WaitGroup // tracks in-flight operation count
 }

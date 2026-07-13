@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -164,9 +165,11 @@ func (p *Directory[T]) Register(name string, cfg SourceConfig) error {
 		return fmt.Errorf("dbstore: %q already registered", name)
 	}
 	p.entries[name] = &directoryEntry[T]{
-		client:    client,
-		throttle:  newThrottle(cfg.PoolConfig.MaxConcurrency),
-		createdAt: time.Now(),
+		client:         client,
+		driver:         cfg.Driver,
+		throttle:       newThrottle(cfg.PoolConfig.MaxConcurrency),
+		maxConcurrency: cfg.PoolConfig.MaxConcurrency,
+		createdAt:      time.Now(),
 	}
 	// beginObserverHandoff captures p.observer in the same critical section
 	// as the insert above, and reserves observerMu before releasing mu —
@@ -180,6 +183,25 @@ func (p *Directory[T]) Register(name string, cfg SourceConfig) error {
 		p.observe(func() { observer.ObserveSourceRegistered(name) })
 	}
 	return nil
+}
+
+// Sources returns a deterministic, redacted snapshot of the currently
+// registered sources. No DSN or client value is retained in SourceInfo.
+func (p *Directory[T]) Sources() []SourceInfo {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	sources := make([]SourceInfo, 0, len(p.entries))
+	for name, entry := range p.entries {
+		sources = append(sources, SourceInfo{
+			Name:           name,
+			Driver:         entry.driver,
+			CreatedAt:      entry.createdAt,
+			MaxConcurrency: entry.maxConcurrency,
+		})
+	}
+	sort.Slice(sources, func(i, j int) bool { return sources[i].Name < sources[j].Name })
+	return sources
 }
 
 // Remove unregisters a datasource and closes its client when supported.

@@ -11,6 +11,7 @@ type (
 	Source[T any]            = store.Source[T]
 	Config                   = store.Config
 	SourceConfig             = store.SourceConfig
+	SourceInfo               = store.SourceInfo
 	PoolConfig               = store.PoolConfig
 	DriverBuilder[T any]     = store.DriverBuilder[T]
 	PoolConfigApplier[T any] = store.PoolConfigApplier[T]
