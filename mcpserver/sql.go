@@ -44,7 +44,7 @@ func (s *Server) listTables(ctx context.Context, _ *mcp.CallToolRequest, in Sour
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var table TableInfo
 			if err := rows.Scan(&table.Schema, &table.Name, &table.Type); err != nil {
@@ -117,7 +117,7 @@ func describeSQLite(ctx context.Context, db *sqlx.DB, table string, out *[]Colum
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var column ColumnInfo
 		var notNull, primaryKey int
@@ -146,7 +146,7 @@ func describeInformationSchema(ctx context.Context, db *sqlx.DB, table string, p
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var column ColumnInfo
 		var nullable string
@@ -224,13 +224,13 @@ func (s *Server) query(ctx context.Context, _ *mcp.CallToolRequest, in QueryInpu
 		if err != nil {
 			return err
 		}
-		defer tx.Rollback()
+		defer func() { _ = tx.Rollback() }()
 
 		rows, err := tx.QueryxContext(ctx, query, in.Args...)
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		output.Columns, err = rows.Columns()
 		if err != nil {
 			return err
