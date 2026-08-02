@@ -13,33 +13,13 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-// inferInterfaceName finds the repository interface declared in sourceFile.
-// A single *Repository interface wins when the file also contains helper
-// interfaces; otherwise the file must contain exactly one interface.
-func inferInterfaceName(sourceFile string) (string, error) {
-	all, err := interfaceNamesInFile(sourceFile)
-	if err != nil {
-		return "", err
-	}
-	var repositories []string
-	for _, name := range all {
-		if strings.HasSuffix(name, "Repository") {
-			repositories = append(repositories, name)
-		}
-	}
-
-	if len(repositories) == 1 {
-		return repositories[0], nil
-	}
-	if len(all) == 1 {
-		return all[0], nil
-	}
-	if len(all) == 0 {
-		return "", fmt.Errorf("no interface declared in %s; pass -interface explicitly", sourceFile)
-	}
-	return "", fmt.Errorf("multiple interfaces declared in %s (%s); pass -interface explicitly", sourceFile, strings.Join(all, ", "))
-}
-
+// interfaceNamesInFile lists every interface type declared in sourceFile.
+// dbstore-gen deliberately never guesses which one is the domain
+// interface from this list — -interface (or a config file's `interface:`
+// field) must name it explicitly. A name-suffix heuristic (picking the
+// only "*Repository"-named interface, or the only interface at all) was
+// tried and removed: it could silently pick the wrong interface instead of
+// failing loudly, which defeats the point of generating code at all.
 func interfaceNamesInFile(sourceFile string) ([]string, error) {
 	f, err := parser.ParseFile(token.NewFileSet(), sourceFile, nil, 0)
 	if err != nil {
@@ -108,7 +88,10 @@ func parseInterface(sourceFile, ifaceName string) (*Interface, error) {
 		}
 	}
 	if !found {
-		return nil, fmt.Errorf("interface %s is not declared in %s", ifaceName, sourceFile)
+		if len(declared) == 0 {
+			return nil, fmt.Errorf("interface %s is not declared in %s (no interfaces found there)", ifaceName, sourceFile)
+		}
+		return nil, fmt.Errorf("interface %s is not declared in %s (found: %s)", ifaceName, sourceFile, strings.Join(declared, ", "))
 	}
 
 	absDir, err := filepath.Abs(filepath.Dir(sourceFile))

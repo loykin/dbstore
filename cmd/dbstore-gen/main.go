@@ -32,7 +32,8 @@ func main() {
 
 func run(args []string) error {
 	fs := flag.NewFlagSet("dbstore-gen", flag.ContinueOnError)
-	ifaceName := fs.String("interface", "", "domain interface name to mirror (inferred when the source has one repository interface)")
+	configPath := fs.String("config", "", "YAML file declaring interface/source/backends; mutually exclusive with -interface/-source/-backend")
+	ifaceName := fs.String("interface", "", "domain interface name to mirror (required unless -config is used — never inferred)")
 	source := fs.String("source", os.Getenv("GOFILE"), "Go file declaring -interface (defaults to GOFILE under go generate)")
 	out := fs.String("out", "", "output file for the generated glue (default: <source base>_gen.go)")
 	generateTest := fs.Bool("test", false, "create a compliance-test skeleton if it does not exist")
@@ -42,26 +43,44 @@ func run(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *source == "" {
-		fs.Usage()
-		return fmt.Errorf("-source is required outside go generate")
-	}
-	if *ifaceName == "" {
-		inferred, err := inferInterfaceName(*source)
+
+	effectiveIface := *ifaceName
+	effectiveSource := *source
+	effectiveTest := *generateTest
+	backendSpecs := []string(backends)
+
+	if *configPath != "" {
+		if *ifaceName != "" || len(backends) > 0 {
+			return fmt.Errorf("-config cannot be combined with -interface or -backend; put them in %s instead", *configPath)
+		}
+		cfg, err := loadConfig(*configPath)
 		if err != nil {
 			return err
 		}
-		*ifaceName = inferred
+		effectiveIface = cfg.Interface
+		effectiveSource = cfg.Source
+		effectiveTest = cfg.Test || *generateTest
+		backendSpecs = make([]string, len(cfg.Backends))
+		for i, b := range cfg.Backends {
+			backendSpecs[i] = b.Name + ":" + b.Adapter
+		}
+	} else if effectiveIface == "" {
+		fs.Usage()
+		return fmt.Errorf("-interface is required (or use -config) — dbstore-gen never guesses which interface to mirror")
+	}
+	if effectiveSource == "" {
+		fs.Usage()
+		return fmt.Errorf("-source is required outside go generate (or use -config)")
 	}
 
-	iface, err := parseInterface(*source, *ifaceName)
+	iface, err := parseInterface(effectiveSource, effectiveIface)
 	if err != nil {
 		return err
 	}
 
-	resolved := make([]Backend, 0, len(backends))
-	seenNames := make(map[string]struct{}, len(backends))
-	for _, spec := range backends {
+	resolved := make([]Backend, 0, len(backendSpecs))
+	seenNames := make(map[string]struct{}, len(backendSpecs))
+	for _, spec := range backendSpecs {
 		name, importPath, err := parseBackendSpec(spec)
 		if err != nil {
 			return err
@@ -79,8 +98,8 @@ func run(args []string) error {
 
 	view := buildView(iface, resolved)
 
-	sourceBase := strings.TrimSuffix(filepath.Base(*source), ".go")
-	dir := filepath.Dir(*source)
+	sourceBase := strings.TrimSuffix(filepath.Base(effectiveSource), ".go")
+	dir := filepath.Dir(effectiveSource)
 	existingTemplates := make(map[string]bool, len(view.Backends))
 	for _, backend := range view.Backends {
 		exists, methods, err := inspectTemplate(dir, backend.TemplateStructName)
@@ -115,7 +134,7 @@ func run(args []string) error {
 	}
 	fmt.Println("wrote", outPath)
 
-	if *generateTest {
+	if effectiveTest {
 		testPath := filepath.Join(dir, sourceBase+"_gen_test.go")
 		if err := writeIfMissing(testPath, func() ([]byte, error) { return renderTestSkeleton(view) }); err != nil {
 			return err

@@ -683,29 +683,44 @@ and each `Adaptor` is a repetitive, easy-to-typo translation — exactly the
 kind of thing worth generating instead of copying by hand. `cmd/dbstore-gen`
 mirrors a hand-written domain interface into that glue:
 
-```go
-//go:generate go tool dbstore-gen -backend sqlite -backend rest
-```
-
-Register the versioned generator once in the application module:
+Register the versioned generator once in the application module, then
+declare what to generate in a YAML config — interface, source file, and
+backend -> adapter mapping are always explicit data, never guessed from
+file content or scattered CLI flags:
 
 ```sh
 go get -tool github.com/loykin/dbstore/cmd/dbstore-gen@<version>
 ```
 
-Under `go generate`, the generator gets the source filename from `GOFILE`
-and infers `UserRepository` when that file declares one `*Repository`
-interface. Built-in backend names resolve to dbstore's adapter packages, so
-their full import paths are unnecessary. Use `-interface` only when the file
-declares multiple repository interfaces, `-source` when invoking the command
-outside `go generate`, `name:import/path` for a custom adapter, and `-test` to
-create an initial compliance-test skeleton. Existing long-form directives
-remain supported.
+```yaml
+# user_repo.gen.yaml
+interface: UserRepository
+source: user_repo.go
+backends:
+  - name: sqlite
+    adapter: github.com/loykin/dbstore/adapters/sqlx
+  - name: rest
+    adapter: github.com/loykin/dbstore/adapters/rest
+```
+
+```go
+//go:generate go tool dbstore-gen -config user_repo.gen.yaml
+```
+
+`adapter` may be a full import path or one of dbstore-gen's built-in short
+names (`sqlite`, `mysql`, `postgres`, `rest`, `opensearch`,
+`elasticsearch`). `-interface`/`-source`/`-backend` flags still exist for
+one-off use outside a checked-in config, but `-interface` is always
+required — dbstore-gen never infers which interface to target from file
+content. An earlier version of this tool guessed it from a `*Repository`
+name-suffix heuristic; that guess was quietly wrong exactly when it
+mattered (the file's only interface being the wrong one), so it was removed
+in favor of always reading it from a config or flag a human wrote down.
 
 This generates, once per run, `user_repo_gen.go` — a `UserRepoTemplate[A]`
 interface plus the generic `userRepo[A]` wrapper that delegates every
 `UserRepository` method through `dbstore.Call`/`dbstore.Exec` — and, the
-first time only, one Template stub per `-backend` with method signatures
+first time only, one Template stub per backend with method signatures
 already filled in and `panic("TODO: implement")` bodies for you to replace.
 The generated file is always safe to regenerate; the stub files are never
 touched again after that first run — see `AGENTS.md`'s "Adding a domain
@@ -713,8 +728,9 @@ repository" section for the full workflow, including what happens when the
 domain interface later gains a method. Generation reports which existing
 Templates are incomplete before changing any files; after those methods are
 implemented, rerunning updates the glue and scaffolds any newly configured
-backends. `examples/repository` is a complete, runnable version of this
-generated pattern.
+backends. `examples/repository` and `examples/repo_compliance` are
+complete, runnable versions of this generated pattern, each with a
+committed `user_repo.gen.yaml`.
 
 The tool dependency keeps generation reproducible without requiring a global
 binary installation.

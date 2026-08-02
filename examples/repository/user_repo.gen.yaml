@@ -1,0 +1,7 @@
+# Explicit input to dbstore-gen — interface/source/backends are spelled
+# out here rather than guessed from file content or CLI flags.
+interface: UserRepository
+source: user_repo.go
+backends:
+  - name: sqlite
+    adapter: github.com/loykin/dbstore/adapters/sqlx

@@ -69,13 +69,38 @@ The workflow is:
 
 1. Register the generator with `go get -tool
    github.com/loykin/dbstore/cmd/dbstore-gen@<version>`, define the domain
-   interface once (e.g. `UserRepository`), then add `//go:generate go tool
-   dbstore-gen -backend sqlite -backend rest`. `GOFILE`, a single
-   `*Repository` interface, and built-in adapter import paths are inferred;
-   use the long-form flags only for ambiguous files or custom adapters. This
-   generates `x_gen.go` (`XTemplate[A]` + the generic wrapper — DO NOT EDIT,
-   regenerated every run) and, the first time only, a `Template` stub per
-   `-backend` with `panic("TODO: implement")` bodies and correct signatures.
+   interface once (e.g. `UserRepository`), then write a YAML config
+   declaring what to generate — interface, source file, and backend ->
+   adapter mapping are always explicit data, never inferred from file
+   content or CLI flags. An earlier version guessed the interface from a
+   `*Repository` name-suffix heuristic; that guess was quietly wrong
+   exactly when it mattered (the file's only interface being the wrong
+   one), so it was removed in favor of always reading it from a config or
+   flag a human wrote down:
+
+   ```yaml
+   # user_repo.gen.yaml
+   interface: UserRepository
+   source: user_repo.go
+   backends:
+     - name: sqlite
+       adapter: github.com/loykin/dbstore/adapters/sqlx
+     - name: rest
+       adapter: github.com/loykin/dbstore/adapters/rest
+   ```
+
+   ```go
+   //go:generate go tool dbstore-gen -config user_repo.gen.yaml
+   ```
+
+   `adapter` may be a full import path or one of `dbstore-gen`'s built-in
+   short names (`sqlite`, `mysql`, `postgres`, `rest`, `opensearch`,
+   `elasticsearch`). This generates `x_gen.go` (`XTemplate[A]` + the generic
+   wrapper — DO NOT EDIT, regenerated every run) and, the first time only, a
+   `Template` stub per backend with `panic("TODO: implement")` bodies and
+   correct signatures. (`-interface`/`-source`/`-backend` flags still work
+   for quick one-off use outside a checked-in config, but `-interface` is
+   always required then — dbstore-gen never guesses it.)
 2. Fill in each backend's `Template` method bodies using that backend's
    `Adaptor` type (`sqlxadapter.Adaptor`, `restadapter.Adaptor`, ...) —
    never the raw client. `Adaptor.Get` already translates a driver

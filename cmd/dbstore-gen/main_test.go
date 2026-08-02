@@ -38,6 +38,60 @@ func TestParseBackendSpec_CustomImport(t *testing.T) {
 	}
 }
 
+func TestRun_ConfigDrivesInterfaceSourceAndBackends(t *testing.T) {
+	dir := t.TempDir()
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	goMod := "module example.com/fixture\n\ngo 1.26.4\n\nrequire github.com/loykin/dbstore v0.0.0\n\nreplace github.com/loykin/dbstore => " + root + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(dir, "user_repo.go")
+	content := "package fixture\n\nimport \"context\"\n\ntype UserRepository interface {\n\tCreate(ctx context.Context, name string) error\n}\n"
+	if err := os.WriteFile(source, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := filepath.Join(dir, "user_repo.gen.yaml")
+	configContent := "interface: UserRepository\nsource: user_repo.go\ntest: true\nbackends:\n  - name: sqlite\n    adapter: sqlite\n"
+	if err := os.WriteFile(configPath, []byte(configContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run([]string{"-config", configPath}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "user_repo_gen.go")); err != nil {
+		t.Fatalf("gen file not created: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "user_repo_sqlite.go")); err != nil {
+		t.Fatalf("backend stub not created: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "user_repo_gen_test.go")); err != nil {
+		t.Fatalf("test skeleton not created even though config set test: true: %v", err)
+	}
+}
+
+func TestRun_ConfigCannotBeCombinedWithInterfaceOrBackend(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "user_repo.gen.yaml")
+	if err := os.WriteFile(configPath, []byte("interface: UserRepository\nsource: user_repo.go\nbackends:\n  - name: sqlite\n    adapter: sqlite\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := run([]string{"-config", configPath, "-interface", "UserRepository"})
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("err = %v, want cannot-combine error for -interface", err)
+	}
+
+	err = run([]string{"-config", configPath, "-backend", "sqlite"})
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("err = %v, want cannot-combine error for -backend", err)
+	}
+}
+
 func TestRun_InterfaceAndBackendGrowthPreserveExistingImplementation(t *testing.T) {
 	dir := t.TempDir()
 	root, err := filepath.Abs("../..")

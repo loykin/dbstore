@@ -2,7 +2,7 @@ package main
 
 import "context"
 
-//go:generate go tool dbstore-gen -backend sqlite
+//go:generate go tool dbstore-gen -config user_repo.gen.yaml
 
 // User is the domain model this example's repository works with.
 type User struct {
