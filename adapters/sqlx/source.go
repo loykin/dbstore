@@ -7,7 +7,9 @@ import (
 	"github.com/loykin/dbstore"
 )
 
-// Source adds SQL transaction support on top of dbstore.Source[*sqlx.DB].
+// Source hands Template code an Adaptor instead of the raw *sqlx.DB — see
+// docs/design-codegen.md for why. Value receiver (not pointer) so a Source
+// value satisfies dbstore.Runner[Adaptor].
 type Source struct {
 	source dbstore.Source[*sqlx.DB]
 }
@@ -16,11 +18,18 @@ func NewSource(name string, exec *dbstore.Executor[*sqlx.DB]) Source {
 	return Source{source: dbstore.NewSource(name, exec)}
 }
 
-func (s *Source) Run(ctx context.Context, fn func(context.Context, *sqlx.DB) error) error {
-	return s.source.Run(ctx, fn)
+var _ dbstore.Runner[Adaptor] = Source{}
+
+func (s Source) Run(ctx context.Context, fn func(context.Context, Adaptor) error) error {
+	return s.source.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
+		return fn(ctx, Adaptor{db: db})
+	})
 }
 
-func (s *Source) RunTx(ctx context.Context, fn func(context.Context, *sqlx.Tx) error) error {
+// RunTx is the low-level escape hatch for direct transaction access outside
+// the Adaptor/Template pattern — it hands back the raw *sqlx.Tx, unlike
+// Adaptor.WithTx which stays inside the Adaptor/TxAdaptor vocabulary.
+func (s Source) RunTx(ctx context.Context, fn func(context.Context, *sqlx.Tx) error) error {
 	return RunTx(s.source.Executor(), ctx, s.source.Name(), fn)
 }
 

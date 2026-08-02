@@ -27,8 +27,8 @@ func NewUserRepo(exec *dbstore.Executor[*restadapter.Client], source string) *Us
 
 func (r *UserRepo) Find(ctx context.Context, id string) (*User, error) {
 	var user User
-	err := r.source.Run(ctx, func(ctx context.Context, client *restadapter.Client) error {
-		return client.DoJSON(ctx, http.MethodGet, "/users/"+id, nil, &user)
+	err := r.source.Run(ctx, func(ctx context.Context, a restadapter.Adaptor) error {
+		return a.Get(ctx, "/users/"+id, &user)
 	})
 	return &user, err
 }
@@ -71,8 +71,8 @@ func NewSecretRepo(exec *dbstore.Executor[*restadapter.Client], source string) *
 
 func (r *SecretRepo) Find(ctx context.Context) (*Secret, error) {
 	var secret Secret
-	err := r.source.Run(ctx, func(ctx context.Context, client *restadapter.Client) error {
-		return client.DoJSON(ctx, http.MethodGet, "/secret", nil, &secret)
+	err := r.source.Run(ctx, func(ctx context.Context, a restadapter.Adaptor) error {
+		return a.Get(ctx, "/secret", &secret)
 	})
 	return &secret, err
 }

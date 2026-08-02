@@ -20,62 +20,6 @@ var sqlitePoolConfig = dbstore.PoolConfig{
 	MaxConcurrency: 1,
 }
 
-type User struct {
-	ID   int    `db:"id"`
-	Name string `db:"name"`
-}
-
-type UserRepository interface {
-	Create(ctx context.Context, name string) error
-	CreateBatch(ctx context.Context, names []string) error
-	FindByID(ctx context.Context, id int) (*User, error)
-	FindAll(ctx context.Context) ([]User, error)
-}
-
-type sqliteUserRepo struct {
-	source sqlxadapter.Source
-}
-
-var _ UserRepository = (*sqliteUserRepo)(nil)
-
-func NewUserRepo(exec *dbstore.Executor[*sqlx.DB], source string) UserRepository {
-	return &sqliteUserRepo{source: sqlxadapter.NewSource(source, exec)}
-}
-
-func (r *sqliteUserRepo) Create(ctx context.Context, name string) error {
-	return r.source.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
-		_, err := db.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, name)
-		return err
-	})
-}
-
-func (r *sqliteUserRepo) CreateBatch(ctx context.Context, names []string) error {
-	return r.source.RunTx(ctx, func(ctx context.Context, tx *sqlx.Tx) error {
-		for _, name := range names {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, name); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
-func (r *sqliteUserRepo) FindByID(ctx context.Context, id int) (*User, error) {
-	var user User
-	err := r.source.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
-		return db.GetContext(ctx, &user, `SELECT id, name FROM users WHERE id = ?`, id)
-	})
-	return &user, err
-}
-
-func (r *sqliteUserRepo) FindAll(ctx context.Context) ([]User, error) {
-	var users []User
-	err := r.source.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
-		return db.SelectContext(ctx, &users, `SELECT id, name FROM users ORDER BY id`)
-	})
-	return users, err
-}
-
 func setupStore(ctx context.Context) (UserRepository, func(), error) {
 	sql := sqlxadapter.New()
 	sql.RegisterDefaultDrivers()
@@ -99,7 +43,8 @@ func setupStore(ctx context.Context) (UserRepository, func(), error) {
 		return nil, nil, err
 	}
 
-	return NewUserRepo(exec, "primary"), cleanup, nil
+	repo := NewUserRepo[sqlxadapter.Adaptor](SqliteUserTemplate{}, sql.Source("primary"))
+	return repo, cleanup, nil
 }
 
 func main() {

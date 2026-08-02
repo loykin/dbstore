@@ -48,23 +48,21 @@ func newAuditRepo(exec *dbstore.Executor[*sqlx.DB], source string) *auditRepo {
 }
 
 func (r *auditRepo) Init(ctx context.Context) error {
-	return r.source.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
-		_, err := db.ExecContext(ctx, `CREATE TABLE audit_log (id INTEGER PRIMARY KEY, message TEXT NOT NULL)`)
-		return err
+	return r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+		return a.Exec(ctx, `CREATE TABLE audit_log (id INTEGER PRIMARY KEY, message TEXT NOT NULL)`)
 	})
 }
 
 func (r *auditRepo) Append(ctx context.Context, message string) error {
-	return r.source.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
-		_, err := db.ExecContext(ctx, `INSERT INTO audit_log (message) VALUES (?)`, message)
-		return err
+	return r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+		return a.Exec(ctx, `INSERT INTO audit_log (message) VALUES (?)`, message)
 	})
 }
 
 func (r *auditRepo) Last(ctx context.Context) (string, error) {
 	var message string
-	err := r.source.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
-		return db.QueryRowContext(ctx, `SELECT message FROM audit_log ORDER BY id DESC LIMIT 1`).Scan(&message)
+	err := r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+		return a.Get(ctx, &message, `SELECT message FROM audit_log ORDER BY id DESC LIMIT 1`)
 	})
 	return message, err
 }

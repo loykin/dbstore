@@ -38,7 +38,9 @@ plus the `NewAdapter`/`NewSource` constructors.
 ### The registration → access chain
 
 `DriverBuilder[T] -> Adapter[T] -> Directory[T] -> Executor[T] -> Source[T]
--> application repository`. Each layer depends only on the one below it:
+-> Adaptor -> Template -> generated combinator -> application repository`.
+Each layer depends only on the one below it (see
+`docs/design-codegen.md`'s "트리 구조" principle):
 
 - `DriverBuilder[T]` opens one concrete `T` from a `SourceConfig`.
 - `Directory[T]` (`internal/store/directory.go`) owns the name -> client
@@ -52,8 +54,47 @@ plus the `NewAdapter`/`NewSource` constructors.
   that keeps all four concrete adapters (sqlx/rest/opensearch/elasticsearch)
   implementing the same method set in sync — add a method there when adding
   one to `Adapter[T]`, and update all four adapter packages together.
-- `Source[T]` is the handle a repository implementation embeds for a `Run`
-  method.
+  `Source(name)` is deliberately *not* on this interface — see
+  `adapters/sqlx/adapter.go`'s doc comment for why.
+- `Source[T]` is the low-level `Runner[T]` core repositories can use
+  directly; `sqlxadapter.Source`/`restadapter.Source` wrap it to hand out an
+  `Adaptor` instead of the raw client (see "Adding a domain repository"
+  below). **Never embed a `Source` or `Adaptor` in a repository struct** —
+  always a named field. Embedding promotes `Run` onto the repository type
+  itself, leaking infra access past the domain interface; `examples/`
+  previously had exactly this bug (see `docs/design-codegen.md`'s "현재
+  문제점").
+
+### Adding a domain repository (multi-backend)
+
+See `docs/design-codegen.md` for the full design and rationale. In short:
+
+1. Define the domain interface once (e.g. `UserRepository`), then run
+   `//go:generate dbstore-gen -interface X -source x.go -backend
+   name:importpath ...`. This generates `x_gen.go` (`XTemplate[A]` +
+   the generic wrapper — DO NOT EDIT, regenerated every run) and, the first
+   time only, a `Template` stub per `-backend` with `panic("TODO:
+   implement")` bodies and correct signatures.
+2. Fill in each backend's `Template` method bodies using that backend's
+   `Adaptor` type (`sqlxadapter.Adaptor`, `restadapter.Adaptor`, ...) —
+   never the raw client. `Adaptor.Get` already translates a driver
+   "not found" (`sql.ErrNoRows`, HTTP 404, ...) into `dbstore.ErrNotFound`;
+   `dbstore.Call` translates that into `(nil, nil)` for the caller, so
+   Template code should not do its own not-found translation beyond
+   returning what `Adaptor.Get` gives it.
+3. Document a multi-op method's atomicity by which `Adaptor` method it uses
+   — `WithTx` (SQL, atomic) vs. a plain loop (no transaction concept,
+   best-effort sequential). Reflect this in the corresponding
+   `dbstoretest.Fixture.Caps.AtomicBatch` so the compliance suite only
+   asserts rollback against fixtures that can actually guarantee it.
+4. Add one `dbstoretest.Fixture` entry per backend and write the shared
+   assertions once, using only the domain interface's methods — see
+   `examples/repo_compliance/main_test.go`.
+5. `go generate ./... && go build ./... && go test ./...` before finishing.
+   A later domain-interface method addition surfaces as a compile error on
+   the `var _ XTemplate[...] = ...Template{}` line in the regenerated
+   `_gen.go` file — add the missing method to the existing (untouched)
+   backend stub file by hand; do not delete and regenerate it.
 
 ### Directory's two-lock design
 

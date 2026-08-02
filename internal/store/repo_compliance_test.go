@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/loykin/dbstore/dbstoretest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -24,8 +25,12 @@ type userRepoFixture struct {
 // runUserRepoComplianceSuite runs one set of behavioral assertions against
 // any UserRepository implementation. Every backend (SQLite, PostgreSQL, ...)
 // must pass the same suite, so drift between implementations is caught here
-// instead of divergently in backend-specific tests.
-func runUserRepoComplianceSuite(t *testing.T, setup func(t *testing.T) userRepoFixture) {
+// instead of divergently in backend-specific tests. caps.AtomicBatch gates
+// the CreateBatch_Rollback assertion — the same Capabilities mechanism
+// examples/repo_compliance uses for its SQL+REST suite, so "does CreateBatch
+// have to be atomic" has one answer per fixture instead of two suites
+// silently disagreeing (see docs/design-codegen.md).
+func runUserRepoComplianceSuite(t *testing.T, setup func(t *testing.T) userRepoFixture, caps dbstoretest.Capabilities) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -69,16 +74,18 @@ func runUserRepoComplianceSuite(t *testing.T, setup func(t *testing.T) userRepoF
 		assert.Len(t, users, 3)
 	})
 
-	t.Run("CreateBatch_Rollback", func(t *testing.T) {
-		f := setup(t)
-		err := runSQLTx(f.exec, ctx, f.source, func(ctx context.Context, tx *sqlx.Tx) error {
-			_, _ = tx.ExecContext(ctx, `INSERT INTO users (name) VALUES (`+f.ph(1)+`)`, "ShouldRollback")
-			return errors.New("intentional")
-		})
-		assert.Error(t, err)
+	if caps.AtomicBatch {
+		t.Run("CreateBatch_Rollback", func(t *testing.T) {
+			f := setup(t)
+			err := runSQLTx(f.exec, ctx, f.source, func(ctx context.Context, tx *sqlx.Tx) error {
+				_, _ = tx.ExecContext(ctx, `INSERT INTO users (name) VALUES (`+f.ph(1)+`)`, "ShouldRollback")
+				return errors.New("intentional")
+			})
+			assert.Error(t, err)
 
-		users, err := f.repo.FindAll(ctx)
-		require.NoError(t, err)
-		assert.Len(t, users, 0)
-	})
+			users, err := f.repo.FindAll(ctx)
+			require.NoError(t, err)
+			assert.Len(t, users, 0)
+		})
+	}
 }

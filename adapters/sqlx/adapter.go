@@ -47,6 +47,16 @@ func (a *Adapter) Executor() *dbstore.Executor[*sqlx.DB] {
 	return a.core.Executor()
 }
 
+// Source returns a Runner[Adaptor] scoped to name, combining Executor() and
+// NewSource into the one call a domain repository actually needs
+// (dbstoretest/design-codegen.md's "Adding a domain repository" pattern).
+// Not part of AdapterContract[T]: its return type (Runner[Adaptor]) isn't
+// expressible generically in terms of T, since Adaptor is this package's
+// own type, not the core adapter's raw client type.
+func (a *Adapter) Source(name string) Source {
+	return NewSource(name, a.core.Executor())
+}
+
 func (a *Adapter) SetObserver(o dbstore.Observer) {
 	a.core.SetObserver(o)
 }

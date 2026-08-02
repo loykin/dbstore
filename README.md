@@ -23,12 +23,16 @@ search queries behind one interface, since that kind of abstraction tends
 to leak the moment two backends diverge in how they actually work.
 
 **The most valuable thing this setup enables** is repository portability.
-Because every backend implementation of a repository has the same
-shape — a `Source[T]` embedded in the repository, `Run` scoping every
-operation to the named client — swapping the backend only ever changes
-`T`, never the shape of the repository. That means one behavioral test
-suite, written once against the repository's interface, can run unchanged
-against every implementation. This is the scenario it targets:
+Every backend implementation of a repository has the same shape: a
+`Source` field — **never embedded**, always named, so its `Run` method
+can't get promoted onto the repository and leak infra access past the
+repository's own interface — handing a backend-specific `Adaptor` (never
+the raw client) into a callback. Swapping the backend only ever changes
+which `Adaptor` type is in play, never the shape of the repository. That
+means one behavioral test suite, written once against the repository's
+interface, can run unchanged against every implementation. See
+`docs/design-codegen.md` for the full design and the drift this shape is
+built to prevent; this is the scenario it targets:
 
 ```go
 // One contract, owned by the application:
@@ -40,8 +44,9 @@ type UserRepository interface {
 
 // One suite, also owned by the application — dbstore doesn't know your
 // repository's contract, so it can't write the assertions for you, only
-// the loop that runs them per backend (see dbstoretest below):
-func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRepository) {
+// the loop that runs them per backend (see dbstoretest below). caps gates
+// assertions not every backend can honor (e.g. transactional atomicity).
+func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRepository, caps dbstoretest.Capabilities) {
 	t.Run("Create_and_FindByID", func(t *testing.T) {
 		repo := newRepo(t)
 		require.NoError(t, repo.Create(ctx, "Alice"))
@@ -51,8 +56,9 @@ func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRep
 		assert.Equal(t, "Alice", u.Name)
 	})
 	t.Run("FindByID_NotFound", func(t *testing.T) {
-		_, err := newRepo(t).FindByID(ctx, 999)
-		assert.Error(t, err)
+		u, err := newRepo(t).FindByID(ctx, 999)
+		require.NoError(t, err) // not found is (nil, nil), not an error — see dbstore.ErrNotFound below
+		assert.Nil(t, u)
 	})
 	// ...
 }
@@ -60,27 +66,29 @@ func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRep
 // Run against every backend:
 func TestUserRepo(t *testing.T) {
 	dbstoretest.RunComplianceSuite(t, []dbstoretest.Fixture[UserRepository]{
-		{Name: "SQLite", New: sqliteFixture},
-		{Name: "Postgres", New: postgresFixture},
+		{Name: "SQLite", New: sqliteFixture, Caps: dbstoretest.Capabilities{AtomicBatch: true}},
+		{Name: "Postgres", New: postgresFixture, Caps: dbstoretest.Capabilities{AtomicBatch: true}},
 	}, runUserRepoComplianceSuite)
 }
 ```
 
 `sqliteFixture` and `postgresFixture` are closures that construct the same
-repository type over a different `T` — a `*sqlx.DB` opened against SQLite in
-one case, PostgreSQL in the other. dbstore's own tests run this same suite
+repository type over a different backend `Adaptor` — `sqlxadapter.Adaptor`
+in both cases here, since dialect differences are absorbed inside the
+adapter (see "SQL Adapter" below). dbstore's own tests run this same suite
 against both a real SQLite database and a PostgreSQL container
 (`internal/store/repo_compliance_test.go`; two separate `Test` functions
 there, not `dbstoretest`, since the PostgreSQL one needs a `-tags
 integration` build tag the SQLite one doesn't).
 
-`examples/repo_compliance` goes one step further, taking `T` outside a
-single backend family: the same `runUserRepoComplianceSuite` runs,
+`examples/repo_compliance` goes one step further, taking the backend
+outside a single family: the same `runUserRepoComplianceSuite` runs,
 completely unchanged, against a SQLite-backed `UserRepository` and a
-REST-backed one hitting a fake JSON API — `*sqlx.DB` vs
-`*restadapter.Client`. Transactional rollback isn't part of that shared
-suite, since not every backend can guarantee it; it's exactly the kind of
-backend-specific capability that stays out of the common contract.
+REST-backed one hitting a fake JSON API — `sqlxadapter.Adaptor` vs
+`restadapter.Adaptor`. Transactional rollback isn't asserted for the REST
+fixture, since REST has no transaction concept; its `Fixture.Caps` simply
+leaves `AtomicBatch` false and the suite skips that one assertion for it —
+see "Code Generator And Capabilities" below.
 
 What makes writing that suite worth it is the layer underneath: named
 registration, a per-source concurrency throttle so one slow backend can't
@@ -129,28 +137,29 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// userRepo is the application-owned repository. Embedding sqlxadapter.Source
-// gives it scoped, throttled access to whichever *sqlx.DB is registered
-// under "primary".
+// userRepo is the application-owned repository. source is a named field —
+// never embedded, or Run would get promoted onto userRepo itself and leak
+// straight past this file's own Create/FindByID methods.
 type userRepo struct {
-	sqlxadapter.Source
+	source sqlxadapter.Source
 }
 
 func NewUserRepo(exec *dbstore.Executor[*sqlx.DB], source string) *userRepo {
-	return &userRepo{Source: sqlxadapter.NewSource(source, exec)}
+	return &userRepo{source: sqlxadapter.NewSource(source, exec)}
 }
 
 func (r *userRepo) Create(ctx context.Context, name string) error {
-	return r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
-		_, err := db.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, name)
-		return err
+	// a is a sqlxadapter.Adaptor, not a *sqlx.DB — it owns dialect rebinding
+	// and sql.ErrNoRows translation so repository code never touches either.
+	return r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+		return a.Exec(ctx, `INSERT INTO users (name) VALUES (?)`, name)
 	})
 }
 
 func (r *userRepo) FindByID(ctx context.Context, id int) (string, error) {
 	var name string
-	err := r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
-		return db.QueryRowContext(ctx, `SELECT name FROM users WHERE id = ?`, id).Scan(&name)
+	err := r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+		return a.Get(ctx, &name, `SELECT name FROM users WHERE id = ?`, id)
 	})
 	return name, err
 }
@@ -213,18 +222,24 @@ flowchart TD
     B["Adapter[T]<br/>Open — registers and connects a named source"]
     C["Directory[T]<br/>lifecycle + per-source concurrency throttle"]
     D["Executor[T]<br/>scoped, throttled access to a named client"]
-    E["Source[T]<br/>embedded in a repository for a Run method"]
+    E["adapter Source<br/>named field on a repository, never embedded"]
+    H["Adaptor<br/>backend-specific handle Source.Run hands to a callback — never the raw client"]
     F[Repository Implementation]
     G[Repository Interface]
 
-    A --> B --> C --> D --> E --> F --> G
+    A --> B --> C --> D --> E --> H --> F --> G
 ```
 
-The application owns repository interfaces, repository implementations, and
-backend-specific operations. dbstore owns source registration, lifecycle,
-throttling, and scoped client access, and stops there. Everything below —
-`Config` files, transactions, REST/OpenSearch/Elasticsearch, custom
-drivers — builds on this same shape.
+Each layer depends only on the one below it — a repository implementation
+touches its `Adaptor`, never `*sqlx.DB`/`*restadapter.Client` directly; a
+`Template` (see "Code Generator And Capabilities" below) touches its
+`Adaptor`, never `Directory`/`Executor` internals. The application owns
+repository interfaces, repository implementations, and backend-specific
+operations. dbstore owns source registration, lifecycle, throttling, and
+scoped client access, and stops there. Everything below — `Config` files,
+transactions, REST/OpenSearch/Elasticsearch, custom drivers — builds on
+this same shape. See `docs/design-codegen.md` for the full reasoning behind
+this layering.
 
 ## Guarantees
 
@@ -291,6 +306,7 @@ github.com/loykin/dbstore/adapters/opensearch    OpenSearch adapter
 github.com/loykin/dbstore/adapters/elasticsearch Elasticsearch adapter
 github.com/loykin/dbstore/adapters/prometheus    Prometheus dbstore.Observer
 github.com/loykin/dbstore/dbstoretest            compliance-suite-per-fixture test helper
+github.com/loykin/dbstore/cmd/dbstore-gen        domain interface -> Template/wrapper generator
 github.com/loykin/dbstore/mcpserver              embeddable MCP server for SQL sources
 github.com/loykin/dbstore/cmd/dbstore-mcp        ready-to-run MCP STDIO server
 ```
@@ -448,32 +464,48 @@ rollback scope.
 
 ### Source And Repository
 
-A source is the runtime handle kept by repository implementations. The
-repository stays application-owned; dbstore only provides scoped access to the
-registered backend client.
+A source is the runtime handle kept by repository implementations, always as
+a named field — **never embedded** (embedding promotes `Run` onto the
+repository itself, leaking infra access past the repository's own
+interface). The repository stays application-owned; dbstore only provides
+scoped access to the registered backend client.
+
+There are two levels of `Source`:
+
+- **`dbstore.Source[T]`** (core) hands the callback the raw client `T`
+  directly. This is the low-level primitive — reach for it only when
+  writing a custom backend adapter, or as a deliberate escape hatch (see
+  the FAQ below).
+- **An adapter `Source`** (`sqlxadapter.Source`, `restadapter.Source`, ...)
+  wraps `dbstore.Source[T]` and hands the callback an **`Adaptor`** instead
+  — a backend-specific type that owns dialect/protocol details (SQL
+  rebinding, not-found translation) so repository code never imports
+  `database/sql` or a protocol package directly. This is what repository
+  code should use.
 
 ```go
 exec := sql.Executor()
 
 type userRepo struct {
-	source dbstore.Source[*sqlx.DB]
+	source sqlxadapter.Source
 }
 
 func NewUserRepo(exec *dbstore.Executor[*sqlx.DB]) *userRepo {
-	return &userRepo{source: dbstore.NewSource("primary", exec)}
+	return &userRepo{source: sqlxadapter.NewSource("primary", exec)}
 }
 
 func (r *userRepo) FindName(ctx context.Context, id int) (string, error) {
 	var name string
-	err := r.source.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
-		return db.QueryRowContext(ctx, "SELECT name FROM users WHERE id = $1", id).Scan(&name)
+	err := r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+		return a.Get(ctx, &name, `SELECT name FROM users WHERE id = $1`, id)
 	})
 	return name, err
 }
 ```
 
-`Executor.Run` is the lower-level primitive. Repository code should normally
-use `Source.Run` or an adapter source such as `sqlx.Source` or `rest.Source`.
+`Executor.Run` is the lowest-level primitive of all — it's what both kinds
+of `Source` are built on. Repository code should normally use an adapter
+`Source`, not `Executor.Run` or `dbstore.Source[T]` directly.
 
 ## SQL Adapter
 
@@ -604,7 +636,7 @@ dedicated adapters backed by their official Go SDKs.
 ```go
 type documentRepo struct {
 	source restadapter.Source
-	index string
+	index  string
 }
 
 func NewDocumentRepo(exec *dbstore.Executor[*restadapter.Client], source, index string) *documentRepo {
@@ -615,8 +647,11 @@ func NewDocumentRepo(exec *dbstore.Executor[*restadapter.Client], source, index 
 }
 
 func (r *documentRepo) Create(ctx context.Context, id, name string) error {
-	return r.source.Run(ctx, func(ctx context.Context, client *restadapter.Client) error {
-		return client.DoJSON(ctx, http.MethodPut, "/"+r.index+"/_create/"+id, Document{Name: name}, nil)
+	// a is a restadapter.Adaptor — Post/Put/Get/Delete already translate a
+	// 404 into dbstore.ErrNotFound, so repository code doesn't inspect
+	// *restadapter.StatusError itself.
+	return r.source.Run(ctx, func(ctx context.Context, a restadapter.Adaptor) error {
+		return a.Put(ctx, "/"+r.index+"/_create/"+id, Document{Name: name})
 	})
 }
 ```
@@ -642,6 +677,46 @@ this: one `UserRepository`, a SQLite-backed and a REST-backed
 implementation, and one test suite run against both via
 `dbstoretest.RunComplianceSuite`.
 
+## Code Generator And Capabilities
+
+For a `UserRepository`-shaped contract that gets implemented against
+several backends, hand-writing the delegation between the domain interface
+and each `Adaptor` is a repetitive, easy-to-typo translation — exactly the
+kind of thing worth generating instead of copying by hand. `cmd/dbstore-gen`
+mirrors a hand-written domain interface into that glue:
+
+```go
+//go:generate dbstore-gen -interface UserRepository -source user_repo.go \
+//   -backend sqlite:github.com/loykin/dbstore/adapters/sqlx \
+//   -backend rest:github.com/loykin/dbstore/adapters/rest
+```
+
+This generates, once per run, `user_repo_gen.go` — a `UserRepoTemplate[A]`
+interface plus the generic `userRepo[A]` wrapper that delegates every
+`UserRepository` method through `dbstore.Call`/`dbstore.Exec` — and, the
+first time only, one Template stub per `-backend` with method signatures
+already filled in and `panic("TODO: implement")` bodies for you to replace.
+The generated file is always safe to regenerate; the stub files are never
+touched again after that first run — see `AGENTS.md`'s "Adding a domain
+repository" section and `docs/design-codegen.md` for the full workflow,
+including what happens when the domain interface later gains a method
+(a compile error, not a silently stale stub). `examples/repository` is a
+complete, runnable version of this generated pattern.
+
+`dbstoretest.Fixture[R]` carries a `Capabilities` value (currently just
+`AtomicBatch`) alongside its `New` constructor, so one compliance suite can
+assert a guarantee — like "`CreateBatch` rolls back completely on failure"
+— only against the fixtures whose backend can actually honor it, instead of
+either failing the fixtures that can't or silently never checking the ones
+that can:
+
+```go
+dbstoretest.RunComplianceSuite(t, []dbstoretest.Fixture[UserRepository]{
+	{Name: "SQLite", New: sqliteFixture, Caps: dbstoretest.Capabilities{AtomicBatch: true}},
+	{Name: "REST", New: restFixture}, // Caps left zero-value: no transaction concept
+}, runUserRepoComplianceSuite)
+```
+
 ## OpenSearch And Elasticsearch
 
 OpenSearch and Elasticsearch use official SDK clients. The adapter package
@@ -658,11 +733,23 @@ err := search.Open("primary", dbstore.SourceConfig{
 })
 ```
 
-Repositories use the SDK client directly:
+Repositories use `opensearchadapter.Adaptor`/`elasticsearchadapter.Adaptor`,
+not the SDK client directly — neither has a `WithTx`, since neither backend
+has a transaction concept, so that capability simply isn't in the type's
+method set:
 
 ```go
 type documentRepo struct {
 	source opensearchadapter.Source
+	index  string
+}
+
+func (r *documentRepo) FindByID(ctx context.Context, id string) (*Document, error) {
+	var doc Document
+	err := r.source.Run(ctx, func(ctx context.Context, a opensearchadapter.Adaptor) error {
+		return a.Get(ctx, r.index, id, &doc) // 404/missing -> dbstore.ErrNotFound
+	})
+	return &doc, err
 }
 ```
 
@@ -830,11 +917,11 @@ examples/rest              custom REST driver registration with restadapter
 examples/custom_adapter    custom backend client registration with dbstore.NewAdapter[T]
 examples/opensearch        OpenSearch SDK client registration
 examples/elasticsearch     Elasticsearch SDK client registration
-examples/repository        repository implementation with sqlxadapter.Source
+examples/repository        dbstore-gen generated UserRepository over sqlxadapter.Adaptor
 examples/multi_db          multiple named SQL sources
 examples/sqlite_concurrent SQLite concurrency throttling
 examples/config            Config-driven setup spanning SQL and REST sources
-examples/repo_compliance   same compliance suite across SQLite and REST via dbstoretest
+examples/repo_compliance   dbstore-gen generated UserRepository, SQLite + REST, one Capabilities-gated suite
 examples/prometheus        SetObserver wired to Prometheus metrics
 ```
 
@@ -842,55 +929,58 @@ examples/prometheus        SetObserver wired to Prometheus metrics
 
 ```text
 dbstore.go             public core API
-internal/store         core implementation
-adapters/sqlx          SQL/sqlx adapter, source, transactions, pool config
-adapters/rest          REST adapter, source, client helpers
-adapters/opensearch    OpenSearch adapter, driver, source alias
-adapters/elasticsearch Elasticsearch adapter, driver, source alias
+internal/store         core implementation (Runner[T], Exec/Call, ErrNotFound live here)
+adapters/sqlx          SQL/sqlx adapter, Source, Adaptor/TxAdaptor, pool config
+adapters/rest          REST adapter, Source, Adaptor, client helpers
+adapters/opensearch    OpenSearch adapter, driver, Source, Adaptor
+adapters/elasticsearch Elasticsearch adapter, driver, Source, Adaptor
 adapters/prometheus    Observer implementation backed by Prometheus metrics
-dbstoretest            RunComplianceSuite/Fixture[R] test helper
+dbstoretest            RunComplianceSuite/Fixture[R]/Capabilities test helper
+cmd/dbstore-gen        domain interface -> Template[A]/generic wrapper generator
 examples               runnable examples
+docs/design-codegen.md full design: Adaptor/Template layering, generator scope, rationale
 ```
 
 ## FAQ
 
 **How do I run operations across two repositories in one transaction?**
 
-dbstore doesn't provide this — `Source.Run`/`RunTx` only ever expose a client
-inside their own callback, with no way to pull a `*sqlx.Tx` out and hand it
-to a second repository. That's intentional: dbstore stops at lifecycle and
-scoped access, and cross-repository transaction coordination is operation
-semantics, which it deliberately leaves to the application (see "Why").
+dbstore doesn't provide this through `Adaptor` — each repository's `source`
+field is private, so a use case coordinating two repositories has no
+`Adaptor`/`TxAdaptor` value to hand to both of them. That's intentional:
+dbstore stops at lifecycle and scoped access, and cross-repository
+transaction coordination is operation semantics, which it deliberately
+leaves to the application (see "Why").
 
-The fix doesn't need any new dbstore code, though — it needs repository
-methods written against `sqlx.ExtContext` (satisfied by both `*sqlx.DB` and
-`*sqlx.Tx`) instead of a concrete `*sqlx.DB`, so the same method works
-whether it's called through `Source.Run` (normal case) or handed a
-use-case-level `*sqlx.Tx` directly (cross-repository case):
+The fix is to add a second, explicitly-lower-level method that takes a raw
+`*sqlx.Tx` instead of going through `Adaptor` — a deliberate, visible
+bypass, not a default path. `sqlxadapter.RunTx` (a free function, unrelated
+to `Adaptor.WithTx`) is kept exactly for this:
 
 ```go
-// The real logic takes sqlx.ExtContext — either a *sqlx.DB or a *sqlx.Tx.
-func (r *userRepo) createWith(ctx context.Context, ext sqlx.ExtContext, name string) error {
-	_, err := ext.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, name)
-	return err
-}
-
-// Normal path: Source.Run hands it a *sqlx.DB.
+// Normal path: Source.Run hands it a sqlxadapter.Adaptor.
 func (r *userRepo) Create(ctx context.Context, name string) error {
-	return r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
-		return r.createWith(ctx, db, name)
+	return r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+		return a.Exec(ctx, `INSERT INTO users (name) VALUES (?)`, name)
 	})
 }
 
-// Cross-repository path: a use case gets a *sqlx.Tx from sqlxadapter.RunTx
-// and passes it directly into both repositories' "with" methods, bypassing
-// Source.Run for this one call so both writes share one transaction.
+// Escape-hatch path: takes a raw *sqlx.Tx directly, bypassing Adaptor —
+// only a use case coordinating multiple repositories should call this.
+func (r *userRepo) createInTx(ctx context.Context, tx *sqlx.Tx, name string) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, name)
+	return err
+}
+
+// A use case gets a *sqlx.Tx from sqlxadapter.RunTx and passes it directly
+// into both repositories' "InTx" methods, so both writes share one
+// transaction.
 func (uc *signupUseCase) RegisterUser(ctx context.Context, name string) error {
 	return sqlxadapter.RunTx(uc.exec, ctx, "primary", func(ctx context.Context, tx *sqlx.Tx) error {
-		if err := uc.users.createWith(ctx, tx, name); err != nil {
+		if err := uc.users.createInTx(ctx, tx, name); err != nil {
 			return err
 		}
-		return uc.accounts.grantWith(ctx, tx, name, 100)
+		return uc.accounts.grantInTx(ctx, tx, name, 100)
 	})
 }
 ```

@@ -10,12 +10,12 @@ import (
 // runUserRepoComplianceSuite asserts the behavior every UserRepository
 // implementation must share. It only calls interface methods — never a
 // backend-specific type — so the same function runs unchanged against the
-// SQLite-backed and REST-backed implementations below. Transactional
-// rollback isn't asserted here because it isn't part of the shared
-// contract: not every backend can guarantee it (compare
-// internal/store/repo_compliance_test.go, which does assert it, but only
-// across SQL backends where it's a fair requirement).
-func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRepository) {
+// SQLite-backed and REST-backed implementations below. caps.AtomicBatch
+// gates CreateBatch_Rollback: REST has no transaction concept (its Adaptor
+// has no WithTx at all — see user_repo_rest.go), so its fixture leaves
+// AtomicBatch false and the suite skips that assertion for it instead of
+// either failing REST or silently never checking SQLite's real guarantee.
+func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRepository, caps dbstoretest.Capabilities) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -59,8 +59,12 @@ func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRep
 
 	t.Run("FindByID_NotFound", func(t *testing.T) {
 		repo := newRepo(t)
-		if _, err := repo.FindByID(ctx, 999); err == nil {
-			t.Fatal("want error for missing id, got nil")
+		u, err := repo.FindByID(ctx, 999)
+		if err != nil {
+			t.Fatalf("want (nil, nil) for missing id, got err = %v", err)
+		}
+		if u != nil {
+			t.Fatalf("want nil user for missing id, got %+v", u)
 		}
 	})
 
@@ -77,6 +81,25 @@ func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRep
 			t.Fatalf("FindAll len = %d, want 3", len(users))
 		}
 	})
+
+	if caps.AtomicBatch {
+		t.Run("CreateBatch_Rollback", func(t *testing.T) {
+			repo := newRepo(t)
+			// "Alice" twice violates the UNIQUE constraint on name (see
+			// setupSQLite) partway through the batch — proving the whole
+			// batch rolled back, not just the failing insert.
+			if err := repo.CreateBatch(ctx, []string{"Alice", "Alice"}); err == nil {
+				t.Fatal("want error for duplicate name, got nil")
+			}
+			users, err := repo.FindAll(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(users) != 0 {
+				t.Fatalf("FindAll len = %d, want 0 after rollback", len(users))
+			}
+		})
+	}
 }
 
 // TestUserRepoCompliance runs the one compliance suite above against both
@@ -94,6 +117,7 @@ func TestUserRepoCompliance(t *testing.T) {
 				t.Cleanup(cleanup)
 				return repo
 			},
+			Caps: dbstoretest.Capabilities{AtomicBatch: true},
 		},
 		{
 			Name: "REST",
@@ -108,6 +132,7 @@ func TestUserRepoCompliance(t *testing.T) {
 				t.Cleanup(cleanup)
 				return repo
 			},
+			// Caps left zero-value: REST has no atomic CreateBatch.
 		},
 	}, runUserRepoComplianceSuite)
 }

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/loykin/dbstore/dbstoretest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -102,5 +103,7 @@ func setupUserRepoFixture(t *testing.T) userRepoFixture {
 }
 
 func TestUserRepoCompliance_SQLite(t *testing.T) {
-	runUserRepoComplianceSuite(t, setupUserRepoFixture)
+	dbstoretest.RunComplianceSuite(t, []dbstoretest.Fixture[userRepoFixture]{
+		{Name: "SQLite", New: setupUserRepoFixture, Caps: dbstoretest.Capabilities{AtomicBatch: true}},
+	}, runUserRepoComplianceSuite)
 }

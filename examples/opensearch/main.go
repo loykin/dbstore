@@ -1,17 +1,15 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
-
-	"github.com/opensearch-project/opensearch-go/v4/opensearchapi"
 
 	"github.com/loykin/dbstore"
 	opensearchadapter "github.com/loykin/dbstore/adapters/opensearch"
@@ -34,43 +32,27 @@ type openSearchDocumentRepo struct {
 
 var _ DocumentRepository = (*openSearchDocumentRepo)(nil)
 
-func NewDocumentRepo(exec *dbstore.Executor[*opensearchapi.Client], source, index string) DocumentRepository {
-	return &openSearchDocumentRepo{
-		source: opensearchadapter.NewSource(source, exec),
-		index:  index,
-	}
+func NewDocumentRepo(source opensearchadapter.Source, index string) DocumentRepository {
+	return &openSearchDocumentRepo{source: source, index: index}
 }
 
 func (r *openSearchDocumentRepo) Create(ctx context.Context, id, name string) error {
-	return r.source.Run(ctx, func(ctx context.Context, client *opensearchapi.Client) error {
-		body, err := json.Marshal(Document{Name: name})
-		if err != nil {
-			return err
-		}
-		_, err = client.Index(ctx, opensearchapi.IndexReq{
-			Index:      r.index,
-			DocumentID: id,
-			Body:       bytes.NewReader(body),
-		})
-		return err
+	return r.source.Run(ctx, func(ctx context.Context, a opensearchadapter.Adaptor) error {
+		return a.Index(ctx, r.index, id, Document{Name: name})
 	})
 }
 
 func (r *openSearchDocumentRepo) FindByID(ctx context.Context, id string) (*Document, error) {
 	var doc Document
-	err := r.source.Run(ctx, func(ctx context.Context, client *opensearchapi.Client) error {
-		resp, err := client.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      r.index,
-			DocumentID: id,
-		})
-		if err != nil {
-			return err
+	err := r.source.Run(ctx, func(ctx context.Context, a opensearchadapter.Adaptor) error {
+		if getErr := a.Get(ctx, r.index, id, &doc); getErr != nil {
+			return getErr
 		}
-		if !resp.Found {
-			return fmt.Errorf("document %q not found", id)
-		}
-		return json.Unmarshal(resp.Source, &doc)
+		return nil
 	})
+	if errors.Is(err, dbstore.ErrNotFound) {
+		return nil, fmt.Errorf("document %q not found", id)
+	}
 	doc.ID = id
 	return &doc, err
 }
@@ -88,7 +70,7 @@ func setupStore(address string) (DocumentRepository, func(), error) {
 		return nil, nil, err
 	}
 
-	return NewDocumentRepo(search.Executor(), "search", "users"), cleanup, nil
+	return NewDocumentRepo(search.Source("search"), "users"), cleanup, nil
 }
 
 func main() {

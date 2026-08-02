@@ -112,8 +112,8 @@ func TestSource_Run(t *testing.T) {
 	}
 
 	source := NewSource("api", adapter.Executor())
-	if err := source.Run(context.Background(), func(ctx context.Context, client *Client) error {
-		return client.DoJSON(ctx, http.MethodDelete, "/documents/1", nil, nil)
+	if err := source.Run(context.Background(), func(ctx context.Context, a Adaptor) error {
+		return a.Delete(ctx, "/documents/1")
 	}); err != nil {
 		t.Fatal(err)
 	}

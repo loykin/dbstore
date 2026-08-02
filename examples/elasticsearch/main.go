@@ -1,17 +1,15 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
-
-	elasticsearch "github.com/elastic/go-elasticsearch/v8"
 
 	"github.com/loykin/dbstore"
 	elasticsearchadapter "github.com/loykin/dbstore/adapters/elasticsearch"
@@ -26,55 +24,24 @@ type DocumentRepo struct {
 	index  string
 }
 
-func NewDocumentRepo(exec *dbstore.Executor[*elasticsearch.Client], source, index string) *DocumentRepo {
-	return &DocumentRepo{
-		source: elasticsearchadapter.NewSource(source, exec),
-		index:  index,
-	}
+func NewDocumentRepo(source elasticsearchadapter.Source, index string) *DocumentRepo {
+	return &DocumentRepo{source: source, index: index}
 }
 
 func (r *DocumentRepo) Save(ctx context.Context, id string, doc Document) error {
-	return r.source.Run(ctx, func(ctx context.Context, client *elasticsearch.Client) error {
-		body, err := json.Marshal(doc)
-		if err != nil {
-			return err
-		}
-		resp, err := client.Index(r.index, bytes.NewReader(body), client.Index.WithDocumentID(id), client.Index.WithContext(ctx))
-		if err != nil {
-			return err
-		}
-		defer func() { _ = resp.Body.Close() }()
-		if resp.IsError() {
-			return fmt.Errorf("index %s/%s failed: %s", r.index, id, resp.Status())
-		}
-		return nil
+	return r.source.Run(ctx, func(ctx context.Context, a elasticsearchadapter.Adaptor) error {
+		return a.Index(ctx, r.index, id, doc)
 	})
 }
 
 func (r *DocumentRepo) Find(ctx context.Context, id string) (*Document, error) {
 	var doc Document
-	err := r.source.Run(ctx, func(ctx context.Context, client *elasticsearch.Client) error {
-		resp, err := client.Get(r.index, id, client.Get.WithContext(ctx))
-		if err != nil {
-			return err
-		}
-		defer func() { _ = resp.Body.Close() }()
-		if resp.IsError() {
-			return fmt.Errorf("get %s/%s failed: %s", r.index, id, resp.Status())
-		}
-
-		var payload struct {
-			Found  bool            `json:"found"`
-			Source json.RawMessage `json:"_source"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-			return err
-		}
-		if !payload.Found {
-			return fmt.Errorf("document %q not found", id)
-		}
-		return json.Unmarshal(payload.Source, &doc)
+	err := r.source.Run(ctx, func(ctx context.Context, a elasticsearchadapter.Adaptor) error {
+		return a.Get(ctx, r.index, id, &doc)
 	})
+	if errors.Is(err, dbstore.ErrNotFound) {
+		return nil, fmt.Errorf("document %q not found", id)
+	}
 	return &doc, err
 }
 
@@ -91,7 +58,7 @@ func setupStore(address string) (*DocumentRepo, func(), error) {
 		return nil, nil, err
 	}
 
-	return NewDocumentRepo(search.Executor(), "primary", "users"), cleanup, nil
+	return NewDocumentRepo(search.Source("primary"), "users"), cleanup, nil
 }
 
 func main() {

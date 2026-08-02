@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/loykin/dbstore/dbstoretest"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -109,22 +110,28 @@ func TestUserRepoCompliance_Postgres(t *testing.T) {
 
 	exec := NewExecutor(pool)
 
-	runUserRepoComplianceSuite(t, func(t *testing.T) userRepoFixture {
-		t.Helper()
-		require.NoError(t, exec.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error {
-			_, err := db.ExecContext(ctx, `DROP TABLE IF EXISTS users`)
-			if err != nil {
-				return err
-			}
-			_, err = db.ExecContext(ctx, `CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT NOT NULL)`)
-			return err
-		}))
+	dbstoretest.RunComplianceSuite(t, []dbstoretest.Fixture[userRepoFixture]{
+		{
+			Name: "Postgres",
+			New: func(t *testing.T) userRepoFixture {
+				t.Helper()
+				require.NoError(t, exec.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error {
+					_, err := db.ExecContext(ctx, `DROP TABLE IF EXISTS users`)
+					if err != nil {
+						return err
+					}
+					_, err = db.ExecContext(ctx, `CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT NOT NULL)`)
+					return err
+				}))
 
-		return userRepoFixture{
-			repo:   newPostgresUserRepo(exec),
-			exec:   exec,
-			source: "primary",
-			ph:     func(n int) string { return "$1" },
-		}
-	})
+				return userRepoFixture{
+					repo:   newPostgresUserRepo(exec),
+					exec:   exec,
+					source: "primary",
+					ph:     func(n int) string { return "$1" },
+				}
+			},
+			Caps: dbstoretest.Capabilities{AtomicBatch: true},
+		},
+	}, runUserRepoComplianceSuite)
 }

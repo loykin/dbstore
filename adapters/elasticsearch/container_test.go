@@ -3,13 +3,11 @@
 package elasticsearchadapter
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
+	"errors"
 	"testing"
+	"time"
 
-	elasticsearch "github.com/elastic/go-elasticsearch/v8"
 	"github.com/stretchr/testify/require"
 	tcelasticsearch "github.com/testcontainers/testcontainers-go/modules/elasticsearch"
 
@@ -44,35 +42,27 @@ func TestAdapter_Container(t *testing.T) {
 		DSN:    ctr.Settings.Address,
 	}))
 
-	source := NewSource("search", adapter.Executor())
+	source := adapter.Source("search")
 
-	err = source.Run(ctx, func(ctx context.Context, client *elasticsearch.Client) error {
-		body, err := json.Marshal(map[string]string{"name": "Alice"})
-		if err != nil {
+	err = source.Run(ctx, func(ctx context.Context, a Adaptor) error {
+		if err := a.Index(ctx, "cs_docs", "1", map[string]string{"name": "Alice"}); err != nil {
 			return err
-		}
-		indexResp, err := client.Index("cs_docs", bytes.NewReader(body),
-			client.Index.WithDocumentID("1"),
-			client.Index.WithContext(ctx),
-			client.Index.WithRefresh("true"),
-		)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = indexResp.Body.Close() }()
-		if indexResp.IsError() {
-			return fmt.Errorf("index failed: %s", indexResp.Status())
 		}
 
-		getResp, err := client.Get("cs_docs", "1", client.Get.WithContext(ctx))
-		if err != nil {
-			return err
+		// Adaptor.Index doesn't force a refresh (that's a per-write
+		// performance tradeoff a general-purpose Adaptor shouldn't hardcode
+		// — see adaptor.go), so poll for Elasticsearch's near-real-time
+		// refresh instead of asserting the doc is visible immediately.
+		var doc map[string]string
+		var getErr error
+		for i := 0; i < 10; i++ {
+			getErr = a.Get(ctx, "cs_docs", "1", &doc)
+			if !errors.Is(getErr, dbstore.ErrNotFound) {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
 		}
-		defer func() { _ = getResp.Body.Close() }()
-		if getResp.IsError() {
-			return fmt.Errorf("get failed: %s", getResp.Status())
-		}
-		return nil
+		return getErr
 	})
 	require.NoError(t, err)
 }

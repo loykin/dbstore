@@ -14,7 +14,7 @@ func TestRunComplianceSuite_RunsOncePerFixtureAsNamedSubtests(t *testing.T) {
 		{Name: "Second", New: func(t *testing.T) *stubRepo { return &stubRepo{label: "second"} }},
 	}
 
-	RunComplianceSuite(t, fixtures, func(t *testing.T, newRepo func(t *testing.T) *stubRepo) {
+	RunComplianceSuite(t, fixtures, func(t *testing.T, newRepo func(t *testing.T) *stubRepo, _ Capabilities) {
 		repo := newRepo(t)
 		seen = append(seen, t.Name(), repo.label)
 	})
@@ -42,12 +42,28 @@ func TestRunComplianceSuite_NewCalledFreshPerSubtestInvocation(t *testing.T) {
 		}},
 	}
 
-	RunComplianceSuite(t, fixtures, func(t *testing.T, newRepo func(t *testing.T) *stubRepo) {
+	RunComplianceSuite(t, fixtures, func(t *testing.T, newRepo func(t *testing.T) *stubRepo, _ Capabilities) {
 		t.Run("A", func(t *testing.T) { newRepo(t) })
 		t.Run("B", func(t *testing.T) { newRepo(t) })
 	})
 
 	if calls != 2 {
 		t.Fatalf("New called %d times, want 2 (once per t.Run inside suite)", calls)
+	}
+}
+
+func TestRunComplianceSuite_PassesFixtureCapabilitiesThrough(t *testing.T) {
+	var got []Capabilities
+	fixtures := []Fixture[*stubRepo]{
+		{Name: "Atomic", New: func(t *testing.T) *stubRepo { return &stubRepo{} }, Caps: Capabilities{AtomicBatch: true}},
+		{Name: "BestEffort", New: func(t *testing.T) *stubRepo { return &stubRepo{} }},
+	}
+
+	RunComplianceSuite(t, fixtures, func(t *testing.T, newRepo func(t *testing.T) *stubRepo, caps Capabilities) {
+		got = append(got, caps)
+	})
+
+	if len(got) != 2 || !got[0].AtomicBatch || got[1].AtomicBatch {
+		t.Fatalf("got %+v, want [{AtomicBatch:true} {AtomicBatch:false}]", got)
 	}
 }

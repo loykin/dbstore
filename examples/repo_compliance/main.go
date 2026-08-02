@@ -18,66 +18,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-type User struct {
-	ID   int    `db:"id" json:"id"`
-	Name string `db:"name" json:"name"`
-}
-
-// UserRepository is the one contract both backends below implement. The
-// compliance suite in main_test.go only ever calls these four methods, so
-// it runs unchanged against either implementation — the concrete proof for
-// the root README's "Why" claim.
-type UserRepository interface {
-	Create(ctx context.Context, name string) error
-	FindByID(ctx context.Context, id int) (*User, error)
-	FindAll(ctx context.Context) ([]User, error)
-	CreateBatch(ctx context.Context, names []string) error
-}
-
-// --- SQLite implementation ---
-
-type sqliteUserRepo struct {
-	sqlxadapter.Source
-}
-
-func newSQLiteUserRepo(exec *dbstore.Executor[*sqlx.DB], source string) UserRepository {
-	return &sqliteUserRepo{Source: sqlxadapter.NewSource(source, exec)}
-}
-
-func (r *sqliteUserRepo) Create(ctx context.Context, name string) error {
-	return r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
-		_, err := db.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, name)
-		return err
-	})
-}
-
-func (r *sqliteUserRepo) FindByID(ctx context.Context, id int) (*User, error) {
-	var u User
-	err := r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
-		return db.GetContext(ctx, &u, `SELECT id, name FROM users WHERE id = ?`, id)
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &u, nil
-}
-
-func (r *sqliteUserRepo) FindAll(ctx context.Context) ([]User, error) {
-	var users []User
-	err := r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
-		return db.SelectContext(ctx, &users, `SELECT id, name FROM users ORDER BY id`)
-	})
-	return users, err
-}
-
-func (r *sqliteUserRepo) CreateBatch(ctx context.Context, names []string) error {
-	for _, name := range names {
-		if err := r.Create(ctx, name); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+// --- SQLite wiring ---
 
 func setupSQLite(ctx context.Context) (UserRepository, func(), error) {
 	sql := sqlxadapter.New()
@@ -99,59 +40,22 @@ func setupSQLite(ctx context.Context) (UserRepository, func(), error) {
 
 	exec := sql.Executor()
 	if err := exec.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error {
-		_, err := db.ExecContext(ctx, `CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)`)
+		// UNIQUE on name lets main_test.go's CreateBatch_Rollback trigger a
+		// genuine mid-batch failure (a duplicate name) using only the
+		// UserRepository interface, instead of reaching for a
+		// backend-specific type to force one.
+		_, err := db.ExecContext(ctx, `CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)`)
 		return err
 	}); err != nil {
 		cleanup()
 		return nil, nil, err
 	}
 
-	return newSQLiteUserRepo(exec, "primary"), cleanup, nil
+	repo := NewUserRepo[sqlxadapter.Adaptor](SqliteUserTemplate{}, sql.Source("primary"))
+	return repo, cleanup, nil
 }
 
-// --- REST implementation ---
-
-type restUserRepo struct {
-	restadapter.Source
-}
-
-func newRESTUserRepo(exec *dbstore.Executor[*restadapter.Client], source string) UserRepository {
-	return &restUserRepo{Source: restadapter.NewSource(source, exec)}
-}
-
-func (r *restUserRepo) Create(ctx context.Context, name string) error {
-	return r.Run(ctx, func(ctx context.Context, client *restadapter.Client) error {
-		return client.DoJSON(ctx, http.MethodPost, "/users", User{Name: name}, nil)
-	})
-}
-
-func (r *restUserRepo) FindByID(ctx context.Context, id int) (*User, error) {
-	var u User
-	err := r.Run(ctx, func(ctx context.Context, client *restadapter.Client) error {
-		return client.DoJSON(ctx, http.MethodGet, fmt.Sprintf("/users/%d", id), nil, &u)
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &u, nil
-}
-
-func (r *restUserRepo) FindAll(ctx context.Context) ([]User, error) {
-	var users []User
-	err := r.Run(ctx, func(ctx context.Context, client *restadapter.Client) error {
-		return client.DoJSON(ctx, http.MethodGet, "/users", nil, &users)
-	})
-	return users, err
-}
-
-func (r *restUserRepo) CreateBatch(ctx context.Context, names []string) error {
-	for _, name := range names {
-		if err := r.Create(ctx, name); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+// --- REST wiring ---
 
 func setupREST(baseURL string) (UserRepository, func(), error) {
 	rest := restadapter.New()
@@ -166,7 +70,8 @@ func setupREST(baseURL string) (UserRepository, func(), error) {
 		return nil, nil, err
 	}
 
-	return newRESTUserRepo(rest.Executor(), "primary"), cleanup, nil
+	repo := NewUserRepo[restadapter.Adaptor](RestUserTemplate{}, rest.Source("primary"))
+	return repo, cleanup, nil
 }
 
 // newFakeUsersServer is a minimal in-memory JSON Users API standing in for a

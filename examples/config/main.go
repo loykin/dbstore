@@ -33,25 +33,27 @@ type UserRepository interface {
 	FindByID(ctx context.Context, id int) (string, error)
 }
 
+// source is a named field, never embedded — embedding sqlxadapter.Source
+// would promote its Run method onto userRepo itself, letting callers reach
+// past the UserRepository interface straight to the raw Adaptor.
 type userRepo struct {
-	sqlxadapter.Source
+	source sqlxadapter.Source
 }
 
-func NewUserRepo(exec *dbstore.Executor[*sqlx.DB], source string) UserRepository {
-	return &userRepo{Source: sqlxadapter.NewSource(source, exec)}
+func NewUserRepo(source sqlxadapter.Source) UserRepository {
+	return &userRepo{source: source}
 }
 
 func (r *userRepo) Create(ctx context.Context, name string) error {
-	return r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
-		_, err := db.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, name)
-		return err
+	return r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+		return a.Exec(ctx, `INSERT INTO users (name) VALUES (?)`, name)
 	})
 }
 
 func (r *userRepo) FindByID(ctx context.Context, id int) (string, error) {
 	var name string
-	err := r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
-		return db.QueryRowContext(ctx, `SELECT name FROM users WHERE id = ?`, id).Scan(&name)
+	err := r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+		return a.Get(ctx, &name, `SELECT name FROM users WHERE id = ?`, id)
 	})
 	return name, err
 }
@@ -62,24 +64,23 @@ type StatsRepository interface {
 }
 
 type statsRepo struct {
-	sqlxadapter.Source
+	source sqlxadapter.Source
 }
 
-func NewStatsRepo(exec *dbstore.Executor[*sqlx.DB], source string) StatsRepository {
-	return &statsRepo{Source: sqlxadapter.NewSource(source, exec)}
+func NewStatsRepo(source sqlxadapter.Source) StatsRepository {
+	return &statsRepo{source: source}
 }
 
 func (r *statsRepo) RecordLogin(ctx context.Context, count int) error {
-	return r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
-		_, err := db.ExecContext(ctx, `INSERT INTO events (type, count) VALUES (?, ?)`, "login", count)
-		return err
+	return r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+		return a.Exec(ctx, `INSERT INTO events (type, count) VALUES (?, ?)`, "login", count)
 	})
 }
 
 func (r *statsRepo) LoginCount(ctx context.Context) (int, error) {
 	var count int
-	err := r.Run(ctx, func(ctx context.Context, db *sqlx.DB) error {
-		return db.QueryRowContext(ctx, `SELECT count FROM events WHERE type = 'login'`).Scan(&count)
+	err := r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+		return a.Get(ctx, &count, `SELECT count FROM events WHERE type = 'login'`)
 	})
 	return count, err
 }
@@ -92,19 +93,19 @@ type DirectoryRepository interface {
 }
 
 type directoryRepo struct {
-	restadapter.Source
+	source restadapter.Source
 }
 
-func NewDirectoryRepo(exec *dbstore.Executor[*restadapter.Client], source string) DirectoryRepository {
-	return &directoryRepo{Source: restadapter.NewSource(source, exec)}
+func NewDirectoryRepo(source restadapter.Source) DirectoryRepository {
+	return &directoryRepo{source: source}
 }
 
 func (r *directoryRepo) FindName(ctx context.Context, id string) (string, error) {
 	var resp struct {
 		Name string `json:"name"`
 	}
-	err := r.Run(ctx, func(ctx context.Context, client *restadapter.Client) error {
-		return client.DoJSON(ctx, http.MethodGet, "/directory/"+id, nil, &resp)
+	err := r.source.Run(ctx, func(ctx context.Context, a restadapter.Adaptor) error {
+		return a.Get(ctx, "/directory/"+id, &resp)
 	})
 	return resp.Name, err
 }
@@ -152,8 +153,9 @@ func main() {
 	// "meta" and "stats" are names the application already knows at compile
 	// time (see config.json) — config only externalizes *how* to open each
 	// source (driver/DSN/pool), not *what they're called*. Repositories
-	// embed sqlxadapter.Source the same way they would if the source had
-	// been opened with a single Open call instead of Configure.
+	// take a named sqlxadapter.Source/restadapter.Source field the same way
+	// they would if the source had been opened with a single Open call
+	// instead of Configure.
 	if err := exec.Run(ctx, "meta", func(ctx context.Context, db *sqlx.DB) error {
 		_, err := db.ExecContext(ctx, `CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)`)
 		return err
@@ -167,9 +169,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	users := NewUserRepo(exec, "meta")
-	stats := NewStatsRepo(exec, "stats")
-	directory := NewDirectoryRepo(rest.Executor(), "directory")
+	users := NewUserRepo(sql.Source("meta"))
+	stats := NewStatsRepo(sql.Source("stats"))
+	directory := NewDirectoryRepo(rest.Source("directory"))
 
 	if err := users.Create(ctx, "Alice"); err != nil {
 		log.Fatal(err)

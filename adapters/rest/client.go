@@ -72,13 +72,35 @@ func (c *Client) DoJSON(ctx context.Context, method, requestPath string, request
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("restadapter: %s %s returned %s: %s", method, requestPath, resp.Status, strings.TrimSpace(string(payload)))
+		return &StatusError{
+			Method:     method,
+			Path:       requestPath,
+			StatusCode: resp.StatusCode,
+			Status:     resp.Status,
+			Body:       strings.TrimSpace(string(payload)),
+		}
 	}
 	if responseBody == nil {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(responseBody)
+}
+
+// StatusError is returned by DoJSON when the server responds with a
+// non-2xx status. Adaptor.Get uses StatusCode to translate a 404 into
+// dbstore.ErrNotFound; other callers can match on StatusCode the same way
+// instead of parsing the error string.
+type StatusError struct {
+	Method     string
+	Path       string
+	StatusCode int
+	Status     string
+	Body       string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("restadapter: %s %s returned %s: %s", e.Method, e.Path, e.Status, e.Body)
 }
 
 func (c *Client) resolve(requestPath string) (*url.URL, error) {
