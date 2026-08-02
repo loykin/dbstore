@@ -12,9 +12,7 @@ import (
 // Adaptor is the only handle a UserRepoTemplate-style backend
 // implementation ever sees for a SQL source — it owns dialect rebinding
 // (sqlx.Rebind) and sql.ErrNoRows translation so Template code never needs
-// to import "database/sql" or know which dialect it is talking to. See
-// docs/design-codegen.md for why Template receives this instead of the raw
-// *sqlx.DB.
+// to import "database/sql" or know which dialect it is talking to.
 type Adaptor struct{ db *sqlx.DB }
 
 // Get runs a single-row query and scans it into dest. A sql.ErrNoRows is

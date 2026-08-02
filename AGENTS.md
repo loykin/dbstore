@@ -39,8 +39,7 @@ plus the `NewAdapter`/`NewSource` constructors.
 
 `DriverBuilder[T] -> Adapter[T] -> Directory[T] -> Executor[T] -> Source[T]
 -> Adaptor -> Template -> generated combinator -> application repository`.
-Each layer depends only on the one below it (see
-`docs/design-codegen.md`'s "트리 구조" principle):
+Each layer depends only on the one below it:
 
 - `DriverBuilder[T]` opens one concrete `T` from a `SourceConfig`.
 - `Directory[T]` (`internal/store/directory.go`) owns the name -> client
@@ -62,19 +61,21 @@ Each layer depends only on the one below it (see
   below). **Never embed a `Source` or `Adaptor` in a repository struct** —
   always a named field. Embedding promotes `Run` onto the repository type
   itself, leaking infra access past the domain interface; `examples/`
-  previously had exactly this bug (see `docs/design-codegen.md`'s "현재
-  문제점").
+  previously had exactly this bug.
 
 ### Adding a domain repository (multi-backend)
 
-See `docs/design-codegen.md` for the full design and rationale. In short:
+The workflow is:
 
-1. Define the domain interface once (e.g. `UserRepository`), then run
-   `//go:generate dbstore-gen -interface X -source x.go -backend
-   name:importpath ...`. This generates `x_gen.go` (`XTemplate[A]` +
-   the generic wrapper — DO NOT EDIT, regenerated every run) and, the first
-   time only, a `Template` stub per `-backend` with `panic("TODO:
-   implement")` bodies and correct signatures.
+1. Register the generator with `go get -tool
+   github.com/loykin/dbstore/cmd/dbstore-gen@<version>`, define the domain
+   interface once (e.g. `UserRepository`), then add `//go:generate go tool
+   dbstore-gen -backend sqlite -backend rest`. `GOFILE`, a single
+   `*Repository` interface, and built-in adapter import paths are inferred;
+   use the long-form flags only for ambiguous files or custom adapters. This
+   generates `x_gen.go` (`XTemplate[A]` + the generic wrapper — DO NOT EDIT,
+   regenerated every run) and, the first time only, a `Template` stub per
+   `-backend` with `panic("TODO: implement")` bodies and correct signatures.
 2. Fill in each backend's `Template` method bodies using that backend's
    `Adaptor` type (`sqlxadapter.Adaptor`, `restadapter.Adaptor`, ...) —
    never the raw client. `Adaptor.Get` already translates a driver
@@ -91,10 +92,11 @@ See `docs/design-codegen.md` for the full design and rationale. In short:
    assertions once, using only the domain interface's methods — see
    `examples/repo_compliance/main_test.go`.
 5. `go generate ./... && go build ./... && go test ./...` before finishing.
-   A later domain-interface method addition surfaces as a compile error on
-   the `var _ XTemplate[...] = ...Template{}` line in the regenerated
-   `_gen.go` file — add the missing method to the existing (untouched)
-   backend stub file by hand; do not delete and regenerate it.
+   When the domain interface gains a method, generation stops before writing
+   anything and names the incomplete Templates. Add the missing method to
+   each existing implementation, then regenerate; do not delete the files.
+   The generated `var _ XTemplate[...] = ...Template{}` assertions remain a
+   second compile-time guard for signature mismatches.
 
 ### Directory's two-lock design
 

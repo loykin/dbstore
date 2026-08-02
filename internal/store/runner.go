@@ -8,8 +8,7 @@ import (
 // Runner is the minimal capability a domain repository needs from a
 // backend handle: run a function against a client of type T. Source[T]
 // satisfies it already; adapter packages expose their own Runner via a
-// backend-specific Adaptor type instead of a raw client (see
-// docs/design-codegen.md).
+// backend-specific Adaptor type instead of a raw client.
 type Runner[T any] interface {
 	Run(ctx context.Context, fn func(context.Context, T) error) error
 }

@@ -2,7 +2,7 @@ package main
 
 import "context"
 
-//go:generate dbstore-gen -interface UserRepository -source user_repo.go -backend sqlite:github.com/loykin/dbstore/adapters/sqlx -backend rest:github.com/loykin/dbstore/adapters/rest
+//go:generate go tool dbstore-gen -backend sqlite -backend rest
 
 // User is the domain model both backends below implement.
 type User struct {

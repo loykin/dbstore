@@ -15,8 +15,7 @@ import "testing"
 // actually provides, so one compliance suite can assert a guarantee only
 // against the fixtures that can honor it instead of a whole suite being
 // forced to skip the assertion because one backend can't (or the suite
-// silently forking into two different suites — see docs/design-codegen.md's
-// "CreateBatch 보장 범위 불일치").
+// silently forking into two different suites).
 type Capabilities struct {
 	// AtomicBatch is true when a multi-record write (e.g. CreateBatch)
 	// is all-or-nothing for this fixture. A SQL backend with a real

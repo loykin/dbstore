@@ -8,13 +8,12 @@ import (
 	"context"
 
 	"github.com/loykin/dbstore"
-{{range .ExtraImports}}	{{.Alias}} "{{.Path}}"
-{{end}}{{range .Backends}}	{{.PkgName}} "{{.ImportPath}}"
+{{range .Imports}}	{{.Alias}} "{{.Path}}"
 {{end}})
 
 // {{.Base}}RepoTemplate defines the per-backend query/protocol logic for
-// {{.InterfaceName}}. Implementations receive an adapter-specific Adaptor
-// (never the raw client) — see docs/design-codegen.md.
+// {{.InterfaceName}}. Implementations receive an adapter-specific Adaptor,
+// never the raw client.
 type {{.Base}}RepoTemplate[A any] interface {
 {{range .Methods}}	{{.Name}}({{.TemplateParams}}) {{.ReturnSig}}
 {{end}}}

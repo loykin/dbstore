@@ -9,8 +9,8 @@ import (
 )
 
 // Source hands Template code an Adaptor instead of the raw
-// *opensearchapi.Client — see docs/design-codegen.md for why. Value
-// receiver (not pointer) so a Source value satisfies dbstore.Runner[Adaptor].
+// *opensearchapi.Client. Value receiver (not pointer) so a Source value
+// satisfies dbstore.Runner[Adaptor].
 type Source struct {
 	source dbstore.Source[*opensearchapi.Client]
 }

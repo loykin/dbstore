@@ -29,7 +29,7 @@ type userRepoFixture struct {
 // the CreateBatch_Rollback assertion — the same Capabilities mechanism
 // examples/repo_compliance uses for its SQL+REST suite, so "does CreateBatch
 // have to be atomic" has one answer per fixture instead of two suites
-// silently disagreeing (see docs/design-codegen.md).
+// silently disagreeing.
 func runUserRepoComplianceSuite(t *testing.T, setup func(t *testing.T) userRepoFixture, caps dbstoretest.Capabilities) {
 	t.Helper()
 	ctx := context.Background()

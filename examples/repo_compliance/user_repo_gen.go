@@ -11,8 +11,8 @@ import (
 )
 
 // UserRepoTemplate defines the per-backend query/protocol logic for
-// UserRepository. Implementations receive an adapter-specific Adaptor
-// (never the raw client) — see docs/design-codegen.md.
+// UserRepository. Implementations receive an adapter-specific Adaptor,
+// never the raw client.
 type UserRepoTemplate[A any] interface {
 	Create(ctx context.Context, a A, name string) error
 	CreateBatch(ctx context.Context, a A, names []string) error

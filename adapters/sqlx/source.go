@@ -7,9 +7,8 @@ import (
 	"github.com/loykin/dbstore"
 )
 
-// Source hands Template code an Adaptor instead of the raw *sqlx.DB — see
-// docs/design-codegen.md for why. Value receiver (not pointer) so a Source
-// value satisfies dbstore.Runner[Adaptor].
+// Source hands Template code an Adaptor instead of the raw *sqlx.DB. Value
+// receiver (not pointer) so a Source value satisfies dbstore.Runner[Adaptor].
 type Source struct {
 	source dbstore.Source[*sqlx.DB]
 }

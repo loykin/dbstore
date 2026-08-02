@@ -30,9 +30,8 @@ repository's own interface — handing a backend-specific `Adaptor` (never
 the raw client) into a callback. Swapping the backend only ever changes
 which `Adaptor` type is in play, never the shape of the repository. That
 means one behavioral test suite, written once against the repository's
-interface, can run unchanged against every implementation. See
-`docs/design-codegen.md` for the full design and the drift this shape is
-built to prevent; this is the scenario it targets:
+interface, can run unchanged against every implementation. This is the
+scenario it targets:
 
 ```go
 // One contract, owned by the application:
@@ -238,8 +237,7 @@ repository interfaces, repository implementations, and backend-specific
 operations. dbstore owns source registration, lifecycle, throttling, and
 scoped client access, and stops there. Everything below — `Config` files,
 transactions, REST/OpenSearch/Elasticsearch, custom drivers — builds on
-this same shape. See `docs/design-codegen.md` for the full reasoning behind
-this layering.
+this same shape.
 
 ## Guarantees
 
@@ -686,10 +684,23 @@ kind of thing worth generating instead of copying by hand. `cmd/dbstore-gen`
 mirrors a hand-written domain interface into that glue:
 
 ```go
-//go:generate dbstore-gen -interface UserRepository -source user_repo.go \
-//   -backend sqlite:github.com/loykin/dbstore/adapters/sqlx \
-//   -backend rest:github.com/loykin/dbstore/adapters/rest
+//go:generate go tool dbstore-gen -backend sqlite -backend rest
 ```
+
+Register the versioned generator once in the application module:
+
+```sh
+go get -tool github.com/loykin/dbstore/cmd/dbstore-gen@<version>
+```
+
+Under `go generate`, the generator gets the source filename from `GOFILE`
+and infers `UserRepository` when that file declares one `*Repository`
+interface. Built-in backend names resolve to dbstore's adapter packages, so
+their full import paths are unnecessary. Use `-interface` only when the file
+declares multiple repository interfaces, `-source` when invoking the command
+outside `go generate`, `name:import/path` for a custom adapter, and `-test` to
+create an initial compliance-test skeleton. Existing long-form directives
+remain supported.
 
 This generates, once per run, `user_repo_gen.go` — a `UserRepoTemplate[A]`
 interface plus the generic `userRepo[A]` wrapper that delegates every
@@ -698,10 +709,15 @@ first time only, one Template stub per `-backend` with method signatures
 already filled in and `panic("TODO: implement")` bodies for you to replace.
 The generated file is always safe to regenerate; the stub files are never
 touched again after that first run — see `AGENTS.md`'s "Adding a domain
-repository" section and `docs/design-codegen.md` for the full workflow,
-including what happens when the domain interface later gains a method
-(a compile error, not a silently stale stub). `examples/repository` is a
-complete, runnable version of this generated pattern.
+repository" section for the full workflow, including what happens when the
+domain interface later gains a method. Generation reports which existing
+Templates are incomplete before changing any files; after those methods are
+implemented, rerunning updates the glue and scaffolds any newly configured
+backends. `examples/repository` is a complete, runnable version of this
+generated pattern.
+
+The tool dependency keeps generation reproducible without requiring a global
+binary installation.
 
 `dbstoretest.Fixture[R]` carries a `Capabilities` value (currently just
 `AtomicBatch`) alongside its `New` constructor, so one compliance suite can
@@ -938,7 +954,6 @@ adapters/prometheus    Observer implementation backed by Prometheus metrics
 dbstoretest            RunComplianceSuite/Fixture[R]/Capabilities test helper
 cmd/dbstore-gen        domain interface -> Template[A]/generic wrapper generator
 examples               runnable examples
-docs/design-codegen.md full design: Adaptor/Template layering, generator scope, rationale
 ```
 
 ## FAQ

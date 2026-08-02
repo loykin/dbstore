@@ -1,11 +1,42 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 const fixtureFile = "testdata/fixture/user_repo.go"
+
+func TestInferInterfaceName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "repo.go")
+	content := []byte("package fixture\n\ntype helper interface{ Help() }\ntype UserRepository interface{ Find() error }\n")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := inferInterfaceName(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "UserRepository" {
+		t.Fatalf("got %q, want UserRepository", got)
+	}
+}
+
+func TestInferInterfaceName_Ambiguous(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "repo.go")
+	content := []byte("package fixture\n\ntype UserRepository interface{}\ntype AuditRepository interface{}\n")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := inferInterfaceName(path)
+	if err == nil || !strings.Contains(err.Error(), "pass -interface explicitly") {
+		t.Fatalf("err = %v, want explicit-interface guidance", err)
+	}
+}
 
 func TestParseInterface_ExtractsMethodsSortedByName(t *testing.T) {
 	iface, err := parseInterface(fixtureFile, "UserRepository")
@@ -80,7 +111,7 @@ func TestParseInterface_RejectsEmbeddedInterface(t *testing.T) {
 
 func TestParseInterface_UnknownInterfaceErrors(t *testing.T) {
 	_, err := parseInterface(fixtureFile, "DoesNotExist")
-	if err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("err = %v, want not-found error", err)
+	if err == nil || !strings.Contains(err.Error(), "not declared") {
+		t.Fatalf("err = %v, want not-declared error", err)
 	}
 }

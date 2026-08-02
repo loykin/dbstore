@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -18,6 +20,95 @@ func TestBaseName(t *testing.T) {
 	}
 }
 
+func TestRenderGenFile_DeduplicatesSharedAdapterImport(t *testing.T) {
+	iface, err := parseInterface(fixtureFile, "UserRepository")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backends := []Backend{
+		{Name: "sqlite", ImportPath: "github.com/loykin/dbstore/adapters/sqlx", PkgName: "sqlxadapter"},
+		{Name: "postgres", ImportPath: "github.com/loykin/dbstore/adapters/sqlx", PkgName: "sqlxadapter"},
+	}
+	out, err := renderGenFile(buildView(iface, backends))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(out)
+	if got := strings.Count(content, `"github.com/loykin/dbstore/adapters/sqlx"`); got != 1 {
+		t.Fatalf("sqlx import count = %d, want 1\n---\n%s", got, content)
+	}
+	for _, assertion := range []string{
+		"var _ UserRepoTemplate[sqlxadapter.Adaptor] = SqliteUserTemplate{}",
+		"var _ UserRepoTemplate[sqlxadapter.Adaptor] = PostgresUserTemplate{}",
+	} {
+		if !strings.Contains(content, assertion) {
+			t.Fatalf("generated file missing %q\n---\n%s", assertion, content)
+		}
+	}
+}
+
+func TestGenerationGrowth_PreservesExistingBackendAndScaffoldsNewBackend(t *testing.T) {
+	dir := t.TempDir()
+	iface := &Interface{
+		Name:    "UserRepository",
+		Package: "fixture",
+		Imports: map[string]string{},
+		Methods: []Method{{Name: "Create", Params: []Param{{Name: "name", Type: "string"}}}},
+	}
+	sqlite := Backend{Name: "sqlite", ImportPath: "github.com/loykin/dbstore/adapters/sqlx", PkgName: "sqlxadapter"}
+	sqlitePath := filepath.Join(dir, "user_repo_sqlite.go")
+	initialView := buildView(iface, []Backend{sqlite})
+	initialStub, err := renderBackendStub(initialView, initialView.Backends[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialStub = append(initialStub, []byte("\n// hand-written body marker\n")...)
+	if err := os.WriteFile(sqlitePath, initialStub, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	iface.Methods = append(iface.Methods, Method{Name: "Delete", Params: []Param{{Name: "id", Type: "int"}}})
+	rest := Backend{Name: "rest", ImportPath: "github.com/loykin/dbstore/adapters/rest", PkgName: "restadapter"}
+	grownView := buildView(iface, []Backend{sqlite, rest})
+	if err := writeIfMissing(sqlitePath, func() ([]byte, error) {
+		return renderBackendStub(grownView, grownView.Backends[0])
+	}); err != nil {
+		t.Fatal(err)
+	}
+	preserved, err := os.ReadFile(sqlitePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(preserved), "hand-written body marker") {
+		t.Fatal("existing backend implementation was overwritten")
+	}
+	if strings.Contains(string(preserved), " Delete(") {
+		t.Fatal("existing backend was unexpectedly patched; missing methods must remain an explicit compile-time task")
+	}
+
+	restPath := filepath.Join(dir, "user_repo_rest.go")
+	if err := writeIfMissing(restPath, func() ([]byte, error) {
+		return renderBackendStub(grownView, grownView.Backends[1])
+	}); err != nil {
+		t.Fatal(err)
+	}
+	newStub, err := os.ReadFile(restPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(newStub), " Delete(") {
+		t.Fatal("new backend stub does not contain the current interface method set")
+	}
+
+	gen, err := renderGenFile(grownView)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(gen), "func (r *userRepo[A]) Delete(") {
+		t.Fatal("regenerated wrapper does not contain the newly added repository method")
+	}
+}
+
 func TestLowerFirstUpperFirst(t *testing.T) {
 	if got := lowerFirst("User"); got != "user" {
 		t.Errorf("lowerFirst(User) = %q", got)
@@ -27,6 +118,13 @@ func TestLowerFirstUpperFirst(t *testing.T) {
 	}
 	if got := lowerFirst(""); got != "" {
 		t.Errorf("lowerFirst(empty) = %q", got)
+	}
+}
+
+func TestResolveBackend_RejectsInvalidNameBeforeLoadingPackage(t *testing.T) {
+	_, err := resolveBackend("bad-name", "example.invalid/adapter")
+	if err == nil || !strings.Contains(err.Error(), "valid Go identifier") {
+		t.Fatalf("err = %v, want invalid-identifier error", err)
 	}
 }
 
@@ -62,7 +160,7 @@ func TestRenderGenFile_ProducesValidGoWithExpectedShape(t *testing.T) {
 		}
 	}
 	// src must never be an anonymous embed — the one structural guarantee
-	// this generator exists to preserve (see docs/design-codegen.md).
+	// this generator exists to preserve.
 	if strings.Contains(content, "\tdbstore.Runner[A]\n") {
 		t.Error("src must be a named field, never an anonymous embed")
 	}

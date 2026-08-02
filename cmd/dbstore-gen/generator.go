@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"go/format"
+	"go/token"
 	"sort"
 	"strings"
 	"text/template"
@@ -15,7 +16,7 @@ import (
 // Backend is one -backend name:importpath flag, resolved to the adapter
 // package's actual name (e.g. "sqlxadapter") and confirmed to export an
 // Adaptor type — the type every adapter package exposes as its
-// Runner-satisfying handle (see docs/design-codegen.md).
+// Runner-satisfying handle.
 type Backend struct {
 	Name       string // -backend flag's left side, e.g. "sqlite"
 	ImportPath string
@@ -23,6 +24,9 @@ type Backend struct {
 }
 
 func resolveBackend(name, importPath string) (Backend, error) {
+	if !token.IsIdentifier(name) {
+		return Backend{}, fmt.Errorf("backend name %q is not a valid Go identifier", name)
+	}
 	cfg := &packages.Config{Mode: packages.NeedName | packages.NeedTypes}
 	pkgs, err := packages.Load(cfg, importPath)
 	if err != nil {
@@ -89,6 +93,11 @@ type backendView struct {
 	TemplateStructName string
 }
 
+type importView struct {
+	Path  string
+	Alias string
+}
+
 type genView struct {
 	Package       string
 	InterfaceName string
@@ -97,7 +106,7 @@ type genView struct {
 	Constructor   string
 	Methods       []methodView
 	Backends      []backendView
-	ExtraImports  []struct{ Path, Alias string }
+	Imports       []importView
 }
 
 func buildView(iface *Interface, backends []Backend) genView {
@@ -134,25 +143,47 @@ func buildView(iface *Interface, backends []Backend) genView {
 		}
 		v.Methods = append(v.Methods, mv)
 	}
+	imports := map[string]string{
+		"github.com/loykin/dbstore": "dbstore",
+	}
+	usedAliases := map[string]string{
+		"context": "context",
+		"dbstore": "github.com/loykin/dbstore",
+	}
+	for path, alias := range iface.Imports {
+		imports[path] = alias
+		usedAliases[alias] = path
+	}
+
+	seenBackendNames := make(map[string]struct{}, len(backends))
 	for _, b := range backends {
+		if _, exists := seenBackendNames[b.Name]; exists {
+			continue
+		}
+		seenBackendNames[b.Name] = struct{}{}
+		alias, ok := imports[b.ImportPath]
+		if !ok {
+			alias = uniqueImportAlias(b.PkgName, b.ImportPath, usedAliases)
+			imports[b.ImportPath] = alias
+		}
 		v.Backends = append(v.Backends, backendView{
 			Name:               b.Name,
-			PkgName:            b.PkgName,
+			PkgName:            alias,
 			ImportPath:         b.ImportPath,
 			TemplateStructName: upperFirst(b.Name) + base + "Template",
 		})
 	}
 
-	paths := make([]string, 0, len(iface.Imports))
-	for path := range iface.Imports {
-		if path == "context" {
+	paths := make([]string, 0, len(imports))
+	for path := range imports {
+		if path == "context" || path == "github.com/loykin/dbstore" {
 			continue
 		}
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
 	for _, path := range paths {
-		v.ExtraImports = append(v.ExtraImports, struct{ Path, Alias string }{Path: path, Alias: iface.Imports[path]})
+		v.Imports = append(v.Imports, importView{Path: path, Alias: imports[path]})
 	}
 	return v
 }

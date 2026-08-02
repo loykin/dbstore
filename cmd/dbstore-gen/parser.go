@@ -2,12 +2,69 @@ package main
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"go/types"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"golang.org/x/tools/go/packages"
 )
+
+// inferInterfaceName finds the repository interface declared in sourceFile.
+// A single *Repository interface wins when the file also contains helper
+// interfaces; otherwise the file must contain exactly one interface.
+func inferInterfaceName(sourceFile string) (string, error) {
+	all, err := interfaceNamesInFile(sourceFile)
+	if err != nil {
+		return "", err
+	}
+	var repositories []string
+	for _, name := range all {
+		if strings.HasSuffix(name, "Repository") {
+			repositories = append(repositories, name)
+		}
+	}
+
+	if len(repositories) == 1 {
+		return repositories[0], nil
+	}
+	if len(all) == 1 {
+		return all[0], nil
+	}
+	if len(all) == 0 {
+		return "", fmt.Errorf("no interface declared in %s; pass -interface explicitly", sourceFile)
+	}
+	return "", fmt.Errorf("multiple interfaces declared in %s (%s); pass -interface explicitly", sourceFile, strings.Join(all, ", "))
+}
+
+func interfaceNamesInFile(sourceFile string) ([]string, error) {
+	f, err := parser.ParseFile(token.NewFileSet(), sourceFile, nil, 0)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", sourceFile, err)
+	}
+
+	var all []string
+	for _, decl := range f.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			typeSpec, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
+			if _, ok := typeSpec.Type.(*ast.InterfaceType); !ok {
+				continue
+			}
+			all = append(all, typeSpec.Name.Name)
+		}
+	}
+	return all, nil
+}
 
 // Param is one non-context parameter of a domain interface method.
 type Param struct {
@@ -39,6 +96,21 @@ type Interface struct {
 // parameter and result types render exactly as declared (including types
 // from other packages) rather than as raw source text.
 func parseInterface(sourceFile, ifaceName string) (*Interface, error) {
+	declared, err := interfaceNamesInFile(sourceFile)
+	if err != nil {
+		return nil, err
+	}
+	found := false
+	for _, name := range declared {
+		if name == ifaceName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("interface %s is not declared in %s", ifaceName, sourceFile)
+	}
+
 	absDir, err := filepath.Abs(filepath.Dir(sourceFile))
 	if err != nil {
 		return nil, fmt.Errorf("resolve source dir: %w", err)
@@ -86,6 +158,10 @@ func parseInterface(sourceFile, ifaceName string) (*Interface, error) {
 	}
 
 	imports := map[string]string{}
+	usedAliases := map[string]string{
+		"context": "context",
+		"dbstore": "github.com/loykin/dbstore",
+	}
 	qualifier := func(p *types.Package) string {
 		if p == nil || p == pkg.Types {
 			// nil: builtin. pkg.Types: the interface's own package — types
@@ -94,8 +170,12 @@ func parseInterface(sourceFile, ifaceName string) (*Interface, error) {
 			// itself.
 			return ""
 		}
-		imports[p.Path()] = p.Name()
-		return p.Name()
+		if alias, ok := imports[p.Path()]; ok {
+			return alias
+		}
+		alias := uniqueImportAlias(p.Name(), p.Path(), usedAliases)
+		imports[p.Path()] = alias
+		return alias
 	}
 
 	methods := make([]Method, 0, iface.NumMethods())
@@ -126,6 +206,20 @@ func parseInterface(sourceFile, ifaceName string) (*Interface, error) {
 		Methods: methods,
 		Imports: imports,
 	}, nil
+}
+
+func uniqueImportAlias(preferred, path string, used map[string]string) string {
+	if current, ok := used[preferred]; !ok || current == path {
+		used[preferred] = path
+		return preferred
+	}
+	for i := 2; ; i++ {
+		candidate := fmt.Sprintf("%s%d", preferred, i)
+		if current, ok := used[candidate]; !ok || current == path {
+			used[candidate] = path
+			return candidate
+		}
+	}
 }
 
 func parseMethod(name string, sig *types.Signature, qualifier types.Qualifier) (Method, error) {
