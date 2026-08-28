@@ -14,9 +14,8 @@ import (
 )
 
 // Backend is one -backend name:importpath flag, resolved to the adapter
-// package's actual name (e.g. "sqlxadapter") and confirmed to export an
-// Adaptor type — the type every adapter package exposes as its
-// Runner-satisfying handle.
+// package's actual name (e.g. "sqlxadapter") and confirmed to export the
+// Handle and Source types used by generated backend methods and constructors.
 type Backend struct {
 	Name       string // -backend flag's left side, e.g. "sqlite"
 	ImportPath string
@@ -39,15 +38,18 @@ func resolveBackend(name, importPath string) (Backend, error) {
 	if len(pkg.Errors) > 0 {
 		return Backend{}, fmt.Errorf("backend package %s has errors: %v", importPath, pkg.Errors)
 	}
-	if pkg.Types.Scope().Lookup("Adaptor") == nil {
-		return Backend{}, fmt.Errorf("backend package %s does not export an Adaptor type — every adapter package must (see adapters/sqlx/adaptor.go)", importPath)
+	if pkg.Types.Scope().Lookup("Handle") == nil {
+		return Backend{}, fmt.Errorf("backend package %s does not export a Handle type — every adapter package used by dbstore-gen must export Handle and Source", importPath)
+	}
+	if pkg.Types.Scope().Lookup("Source") == nil {
+		return Backend{}, fmt.Errorf("backend package %s does not export a Source type — every adapter package used by dbstore-gen must export Handle and Source", importPath)
 	}
 	return Backend{Name: name, ImportPath: importPath, PkgName: pkg.Name}, nil
 }
 
 // baseName strips a trailing "Repository" so generated identifiers read as
-// UserRepoTemplate/userRepo/NewUserRepo instead of
-// UserRepositoryRepoTemplate. Interfaces not named *Repository keep their
+// UserRepoBackend/userRepo/NewUserRepo instead of
+// UserRepositoryRepoBackend. Interfaces not named *Repository keep their
 // full name as the base.
 func baseName(ifaceName string) string {
 	const suffix = "Repository"
@@ -79,7 +81,7 @@ type methodView struct {
 	Name               string
 	Params             []Param
 	DomainParams       string
-	TemplateParams     string
+	BackendParams      string
 	DomainArgsPrefixed string
 	ReturnSig          string
 	HasValue           bool
@@ -87,10 +89,12 @@ type methodView struct {
 }
 
 type backendView struct {
-	Name               string
-	PkgName            string
-	ImportPath         string
-	TemplateStructName string
+	Name              string
+	PkgName           string
+	ImportPath        string
+	BackendStructName string
+	FactoryName       string
+	FixtureVarName    string
 }
 
 type importView struct {
@@ -104,9 +108,11 @@ type genView struct {
 	Base          string
 	WrapperStruct string
 	Constructor   string
+	Capabilities  string
 	Methods       []methodView
 	Backends      []backendView
 	Imports       []importView
+	DomainImports []importView
 }
 
 func buildView(iface *Interface, backends []Backend) genView {
@@ -117,6 +123,7 @@ func buildView(iface *Interface, backends []Backend) genView {
 		Base:          base,
 		WrapperStruct: lowerFirst(base) + "Repo",
 		Constructor:   "New" + base + "Repo",
+		Capabilities:  lowerFirst(base) + "RepoCapabilities",
 	}
 	for _, m := range iface.Methods {
 		mv := methodView{
@@ -125,16 +132,22 @@ func buildView(iface *Interface, backends []Backend) genView {
 			HasValue:  m.HasValue,
 			ValueType: m.ValueType,
 		}
-		var domainParams, templateParams, argsPrefixed strings.Builder
+		var domainParams, backendParams, argsPrefixed strings.Builder
 		domainParams.WriteString("ctx context.Context")
-		templateParams.WriteString("ctx context.Context, a A")
+		backendParams.WriteString("ctx context.Context, h A")
 		for _, p := range m.Params {
-			domainParams.WriteString(", " + p.Name + " " + p.Type)
-			templateParams.WriteString(", " + p.Name + " " + p.Type)
-			argsPrefixed.WriteString(", " + p.Name)
+			paramType := p.Type
+			arg := p.Name
+			if p.Variadic {
+				paramType = "..." + paramType
+				arg += "..."
+			}
+			domainParams.WriteString(", " + p.Name + " " + paramType)
+			backendParams.WriteString(", " + p.Name + " " + paramType)
+			argsPrefixed.WriteString(", " + arg)
 		}
 		mv.DomainParams = domainParams.String()
-		mv.TemplateParams = templateParams.String()
+		mv.BackendParams = backendParams.String()
 		mv.DomainArgsPrefixed = argsPrefixed.String()
 		if m.HasValue {
 			mv.ReturnSig = "(" + m.ValueType + ", error)"
@@ -167,10 +180,12 @@ func buildView(iface *Interface, backends []Backend) genView {
 			imports[b.ImportPath] = alias
 		}
 		v.Backends = append(v.Backends, backendView{
-			Name:               b.Name,
-			PkgName:            alias,
-			ImportPath:         b.ImportPath,
-			TemplateStructName: upperFirst(b.Name) + base + "Template",
+			Name:              b.Name,
+			PkgName:           alias,
+			ImportPath:        b.ImportPath,
+			BackendStructName: upperFirst(b.Name) + base + "Backend",
+			FactoryName:       "New" + upperFirst(b.Name) + iface.Name,
+			FixtureVarName:    lowerFirst(upperFirst(b.Name) + base + "Fixture"),
 		})
 	}
 
@@ -184,6 +199,9 @@ func buildView(iface *Interface, backends []Backend) genView {
 	sort.Strings(paths)
 	for _, path := range paths {
 		v.Imports = append(v.Imports, importView{Path: path, Alias: imports[path]})
+		if _, ok := iface.Imports[path]; ok {
+			v.DomainImports = append(v.DomainImports, importView{Path: path, Alias: imports[path]})
+		}
 	}
 	return v
 }
@@ -192,8 +210,20 @@ func renderGenFile(v genView) ([]byte, error) {
 	return render(genFileTemplate, v)
 }
 
-func renderTestSkeleton(v genView) ([]byte, error) {
-	return render(testSkeletonTemplate, v)
+func renderComplianceSuiteSkeleton(v genView) ([]byte, error) {
+	return render(complianceSuiteSkeletonTemplate, v)
+}
+
+func renderFixtureStub(v genView, b backendView) ([]byte, error) {
+	type stubView struct {
+		genView
+		Backend backendView
+	}
+	return render(fixtureStubTemplate, stubView{genView: v, Backend: b})
+}
+
+func renderComplianceRegistry(v genView) ([]byte, error) {
+	return render(complianceRegistryTemplate, v)
 }
 
 func renderBackendStub(v genView, b backendView) ([]byte, error) {

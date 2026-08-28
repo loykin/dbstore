@@ -11,10 +11,10 @@ import (
 	"strings"
 )
 
-// inspectTemplate finds production methods declared for receiverName across
+// inspectBackend finds production methods declared for receiverName across
 // the package. Implementations may be split or renamed; file layout is not a
 // correctness requirement after the initial scaffold.
-func inspectTemplate(dir, receiverName string) (exists bool, methods map[string]struct{}, err error) {
+func inspectBackend(dir, receiverName string) (exists bool, methods map[string]struct{}, err error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return false, nil, fmt.Errorf("read package directory %s: %w", dir, err)
@@ -69,4 +69,36 @@ func missingMethodNames(want []methodView, have map[string]struct{}) []string {
 	}
 	sort.Strings(missing)
 	return missing
+}
+
+func missingMethods(want []methodView, have map[string]struct{}) []methodView {
+	var missing []methodView
+	for _, method := range want {
+		if _, ok := have[method.Name]; !ok {
+			missing = append(missing, method)
+		}
+	}
+	return missing
+}
+
+// renderMissingMethodStubs returns copy-ready methods for an existing backend
+// implementation. The generator never edits application-owned backend files,
+// but its failure must still tell the user exactly what to add.
+func renderMissingMethodStubs(backend backendView, methods []methodView) string {
+	var out strings.Builder
+	for i, method := range methods {
+		if i > 0 {
+			out.WriteString("\n\n")
+		}
+		fmt.Fprintf(&out, "func (%s) %s(ctx context.Context, h %s.Handle", backend.BackendStructName, method.Name, backend.PkgName)
+		for _, param := range method.Params {
+			paramType := param.Type
+			if param.Variadic {
+				paramType = "..." + paramType
+			}
+			fmt.Fprintf(&out, ", %s %s", param.Name, paramType)
+		}
+		fmt.Fprintf(&out, ") %s {\n\tpanic(\"TODO: implement\")\n}", method.ReturnSig)
+	}
+	return out.String()
 }

@@ -40,7 +40,7 @@ func (a *Adapter) Executor() *dbstore.Executor[*opensearchapi.Client] {
 	return a.core.Executor()
 }
 
-// Source returns a Runner[Adaptor] scoped to name — see the sqlxadapter
+// Source returns a Runner[Handle] scoped to name — see the sqlxadapter
 // equivalent for why this isn't part of AdapterContract[T].
 func (a *Adapter) Source(name string) Source {
 	return NewSource(name, a.core.Executor())

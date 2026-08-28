@@ -43,25 +43,25 @@ type auditRepo struct {
 	source sqlxadapter.Source
 }
 
-func newAuditRepo(exec *dbstore.Executor[*sqlx.DB], source string) *auditRepo {
-	return &auditRepo{source: sqlxadapter.NewSource(source, exec)}
+func newAuditRepo(source sqlxadapter.Source) *auditRepo {
+	return &auditRepo{source: source}
 }
 
 func (r *auditRepo) Init(ctx context.Context) error {
-	return r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+	return r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Handle) error {
 		return a.Exec(ctx, `CREATE TABLE audit_log (id INTEGER PRIMARY KEY, message TEXT NOT NULL)`)
 	})
 }
 
 func (r *auditRepo) Append(ctx context.Context, message string) error {
-	return r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+	return r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Handle) error {
 		return a.Exec(ctx, `INSERT INTO audit_log (message) VALUES (?)`, message)
 	})
 }
 
 func (r *auditRepo) Last(ctx context.Context) (string, error) {
 	var message string
-	err := r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+	err := r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Handle) error {
 		return a.Get(ctx, &message, `SELECT message FROM audit_log ORDER BY id DESC LIMIT 1`)
 	})
 	return message, err
@@ -93,7 +93,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	repo := newAuditRepo(sql.Executor(), "tenant-a")
+	repo := newAuditRepo(sql.Source("tenant-a"))
 	if err := repo.Init(ctx); err != nil {
 		log.Fatal(err)
 	}

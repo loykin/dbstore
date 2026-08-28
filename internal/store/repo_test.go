@@ -103,7 +103,7 @@ func setupUserRepoFixture(t *testing.T) userRepoFixture {
 }
 
 func TestUserRepoCompliance_SQLite(t *testing.T) {
-	dbstoretest.RunComplianceSuite(t, []dbstoretest.Fixture[userRepoFixture]{
-		{Name: "SQLite", New: setupUserRepoFixture, Caps: dbstoretest.Capabilities{AtomicBatch: true}},
+	dbstoretest.RunComplianceSuite(t, []dbstoretest.Fixture[userRepoFixture, userRepoCapabilities]{
+		{Name: "SQLite", New: setupUserRepoFixture, Caps: userRepoCapabilities{AtomicBatch: true}},
 	}, runUserRepoComplianceSuite)
 }

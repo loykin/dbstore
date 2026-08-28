@@ -112,7 +112,7 @@ func TestSource_Run(t *testing.T) {
 	}
 
 	source := NewSource("api", adapter.Executor())
-	if err := source.Run(context.Background(), func(ctx context.Context, a Adaptor) error {
+	if err := source.Run(context.Background(), func(ctx context.Context, a Handle) error {
 		return a.Delete(ctx, "/documents/1")
 	}); err != nil {
 		t.Fatal(err)

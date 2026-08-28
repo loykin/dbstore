@@ -10,7 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func newTestAdaptor(t *testing.T) Adaptor {
+func newTestHandle(t *testing.T) Handle {
 	t.Helper()
 	db, err := sqlx.Open("sqlite", ":memory:")
 	if err != nil {
@@ -20,11 +20,11 @@ func newTestAdaptor(t *testing.T) Adaptor {
 	if _, err := db.Exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)`); err != nil {
 		t.Fatal(err)
 	}
-	return Adaptor{db: db}
+	return Handle{db: db}
 }
 
-func TestAdaptor_Get_NotFoundTranslatesToErrNotFound(t *testing.T) {
-	a := newTestAdaptor(t)
+func TestHandle_Get_NotFoundTranslatesToErrNotFound(t *testing.T) {
+	a := newTestHandle(t)
 	var name string
 	err := a.Get(context.Background(), &name, `SELECT name FROM users WHERE id = ?`, 999)
 	if !errors.Is(err, dbstore.ErrNotFound) {
@@ -32,8 +32,8 @@ func TestAdaptor_Get_NotFoundTranslatesToErrNotFound(t *testing.T) {
 	}
 }
 
-func TestAdaptor_Get_Found(t *testing.T) {
-	a := newTestAdaptor(t)
+func TestHandle_Get_Found(t *testing.T) {
+	a := newTestHandle(t)
 	if err := a.Exec(context.Background(), `INSERT INTO users (name) VALUES (?)`, "Alice"); err != nil {
 		t.Fatal(err)
 	}
@@ -46,9 +46,9 @@ func TestAdaptor_Get_Found(t *testing.T) {
 	}
 }
 
-func TestAdaptor_WithTx_CommitsOnSuccess(t *testing.T) {
-	a := newTestAdaptor(t)
-	err := a.WithTx(context.Background(), func(tx TxAdaptor) error {
+func TestHandle_WithTx_CommitsOnSuccess(t *testing.T) {
+	a := newTestHandle(t)
+	err := a.WithTx(context.Background(), func(tx TxHandle) error {
 		return tx.Exec(context.Background(), `INSERT INTO users (name) VALUES (?)`, "Bob")
 	})
 	if err != nil {
@@ -63,10 +63,10 @@ func TestAdaptor_WithTx_CommitsOnSuccess(t *testing.T) {
 	}
 }
 
-func TestAdaptor_WithTx_RollsBackOnError(t *testing.T) {
-	a := newTestAdaptor(t)
+func TestHandle_WithTx_RollsBackOnError(t *testing.T) {
+	a := newTestHandle(t)
 	sentinel := errors.New("intentional")
-	err := a.WithTx(context.Background(), func(tx TxAdaptor) error {
+	err := a.WithTx(context.Background(), func(tx TxHandle) error {
 		if execErr := tx.Exec(context.Background(), `INSERT INTO users (name) VALUES (?)`, "ShouldRollback"); execErr != nil {
 			return execErr
 		}

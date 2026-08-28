@@ -10,14 +10,14 @@ import (
 	sqlxadapter "github.com/loykin/dbstore/adapters/sqlx"
 )
 
-// UserRepoTemplate defines the per-backend query/protocol logic for
-// UserRepository. Implementations receive an adapter-specific Adaptor,
+// UserRepoBackend defines the per-backend query/protocol logic for
+// UserRepository. Implementations receive an adapter-specific Handle,
 // never the raw client.
-type UserRepoTemplate[A any] interface {
-	Create(ctx context.Context, a A, name string) error
-	CreateBatch(ctx context.Context, a A, names []string) error
-	FindAll(ctx context.Context, a A) ([]User, error)
-	FindByID(ctx context.Context, a A, id int) (*User, error)
+type UserRepoBackend[A any] interface {
+	Create(ctx context.Context, h A, name string) error
+	CreateBatch(ctx context.Context, h A, names []string) error
+	FindAll(ctx context.Context, h A) ([]User, error)
+	FindByID(ctx context.Context, h A, id int) (*User, error)
 }
 
 // userRepo is the only implementation of UserRepository —
@@ -26,46 +26,46 @@ type UserRepoTemplate[A any] interface {
 // would promote Runner[A].Run onto userRepo[A] itself, leaking
 // infra access past the UserRepository contract.
 type userRepo[A any] struct {
-	tmpl UserRepoTemplate[A]
-	src  dbstore.Runner[A]
+	backend UserRepoBackend[A]
+	src     dbstore.Runner[A]
 }
 
-// NewUserRepo combines a backend Template with a Runner to produce a
-// UserRepository.
-func NewUserRepo[A any](tmpl UserRepoTemplate[A], src dbstore.Runner[A]) UserRepository {
-	return &userRepo[A]{tmpl: tmpl, src: src}
+// NewUserRepo combines backend-specific repository operations with a
+// source-scoped Runner to produce a UserRepository.
+func NewUserRepo[A any](backend UserRepoBackend[A], src dbstore.Runner[A]) UserRepository {
+	return &userRepo[A]{backend: backend, src: src}
 }
 
 func (r *userRepo[A]) Create(ctx context.Context, name string) error {
 	return dbstore.Exec(ctx, r.src, func(ctx context.Context, a A) error {
-		return r.tmpl.Create(ctx, a, name)
+		return r.backend.Create(ctx, a, name)
 	})
 }
 
 func (r *userRepo[A]) CreateBatch(ctx context.Context, names []string) error {
 	return dbstore.Exec(ctx, r.src, func(ctx context.Context, a A) error {
-		return r.tmpl.CreateBatch(ctx, a, names)
+		return r.backend.CreateBatch(ctx, a, names)
 	})
 }
 
 func (r *userRepo[A]) FindAll(ctx context.Context) ([]User, error) {
 	return dbstore.Call(ctx, r.src, func(ctx context.Context, a A) ([]User, error) {
-		return r.tmpl.FindAll(ctx, a)
+		return r.backend.FindAll(ctx, a)
 	})
 }
 
 func (r *userRepo[A]) FindByID(ctx context.Context, id int) (*User, error) {
 	return dbstore.Call(ctx, r.src, func(ctx context.Context, a A) (*User, error) {
-		return r.tmpl.FindByID(ctx, a, id)
+		return r.backend.FindByID(ctx, a, id)
 	})
 }
 
-// var _ compile-time assertion: if sqlite's Template stops implementing
-// UserRepoTemplate (e.g. UserRepository gained a method), this
+// var _ compile-time assertion: if sqlite's Backend stops implementing
+// UserRepoBackend (e.g. UserRepository gained a method), this
 // line fails to compile instead of the gap going unnoticed.
-var _ UserRepoTemplate[sqlxadapter.Adaptor] = SqliteUserTemplate{}
+var _ UserRepoBackend[sqlxadapter.Handle] = SqliteUserBackend{}
 
-// var _ compile-time assertion: if rest's Template stops implementing
-// UserRepoTemplate (e.g. UserRepository gained a method), this
+// var _ compile-time assertion: if rest's Backend stops implementing
+// UserRepoBackend (e.g. UserRepository gained a method), this
 // line fails to compile instead of the gap going unnoticed.
-var _ UserRepoTemplate[restadapter.Adaptor] = RestUserTemplate{}
+var _ UserRepoBackend[restadapter.Handle] = RestUserBackend{}

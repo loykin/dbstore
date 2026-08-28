@@ -6,8 +6,8 @@ import (
 	"github.com/loykin/dbstore"
 )
 
-// Source hands Template code an Adaptor instead of the raw *Client. Value
-// receiver (not pointer) so a Source value satisfies dbstore.Runner[Adaptor].
+// Source hands repository backend code a Handle instead of the raw *Client. Value
+// receiver (not pointer) so a Source value satisfies dbstore.Runner[Handle].
 type Source struct {
 	source dbstore.Source[*Client]
 }
@@ -16,10 +16,10 @@ func NewSource(name string, exec *dbstore.Executor[*Client]) Source {
 	return Source{source: dbstore.NewSource(name, exec)}
 }
 
-var _ dbstore.Runner[Adaptor] = Source{}
+var _ dbstore.Runner[Handle] = Source{}
 
-func (s Source) Run(ctx context.Context, fn func(context.Context, Adaptor) error) error {
+func (s Source) Run(ctx context.Context, fn func(context.Context, Handle) error) error {
 	return s.source.Run(ctx, func(ctx context.Context, c *Client) error {
-		return fn(ctx, Adaptor{c: c})
+		return fn(ctx, Handle{c: c})
 	})
 }

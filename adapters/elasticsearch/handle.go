@@ -12,17 +12,17 @@ import (
 	"github.com/loykin/dbstore"
 )
 
-// Adaptor is the only handle a UserRepoTemplate-style backend
+// Handle is the only handle a UserRepoBackend-style backend
 // implementation ever sees for an Elasticsearch source — it owns JSON
-// marshaling and not-found translation so Template code never needs to
+// marshaling and not-found translation so Backend code never needs to
 // import the elasticsearch client package directly. Unlike
-// sqlxadapter.Adaptor, there is no WithTx: Elasticsearch has no
+// sqlxadapter.Handle, there is no WithTx: Elasticsearch has no
 // transaction concept, so that capability simply isn't in this type's
 // method set.
-type Adaptor struct{ client *elasticsearch.Client }
+type Handle struct{ client *elasticsearch.Client }
 
 // Index creates or replaces the document at index/id.
-func (a Adaptor) Index(ctx context.Context, index, id string, doc any) error {
+func (a Handle) Index(ctx context.Context, index, id string, doc any) error {
 	body, err := json.Marshal(doc)
 	if err != nil {
 		return err
@@ -41,7 +41,7 @@ func (a Adaptor) Index(ctx context.Context, index, id string, doc any) error {
 // Get fetches the document at index/id and decodes it into dest. A 404 is
 // translated into dbstore.ErrNotFound, which dbstore.Call turns into a
 // (zero, nil) result for the caller.
-func (a Adaptor) Get(ctx context.Context, index, id string, dest any) error {
+func (a Handle) Get(ctx context.Context, index, id string, dest any) error {
 	resp, err := a.client.Get(index, id, a.client.Get.WithContext(ctx))
 	if err != nil {
 		return err
@@ -69,7 +69,7 @@ func (a Adaptor) Get(ctx context.Context, index, id string, dest any) error {
 
 // Delete removes the document at index/id. A 404 is translated into
 // dbstore.ErrNotFound the same way Get does.
-func (a Adaptor) Delete(ctx context.Context, index, id string) error {
+func (a Handle) Delete(ctx context.Context, index, id string) error {
 	resp, err := a.client.Delete(index, id, a.client.Delete.WithContext(ctx))
 	if err != nil {
 		return err

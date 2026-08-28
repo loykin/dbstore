@@ -35,7 +35,7 @@ type UserRepository interface {
 
 // source is a named field, never embedded — embedding sqlxadapter.Source
 // would promote its Run method onto userRepo itself, letting callers reach
-// past the UserRepository interface straight to the raw Adaptor.
+// past the UserRepository interface straight to the raw Handle.
 type userRepo struct {
 	source sqlxadapter.Source
 }
@@ -45,14 +45,14 @@ func NewUserRepo(source sqlxadapter.Source) UserRepository {
 }
 
 func (r *userRepo) Create(ctx context.Context, name string) error {
-	return r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+	return r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Handle) error {
 		return a.Exec(ctx, `INSERT INTO users (name) VALUES (?)`, name)
 	})
 }
 
 func (r *userRepo) FindByID(ctx context.Context, id int) (string, error) {
 	var name string
-	err := r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+	err := r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Handle) error {
 		return a.Get(ctx, &name, `SELECT name FROM users WHERE id = ?`, id)
 	})
 	return name, err
@@ -72,14 +72,14 @@ func NewStatsRepo(source sqlxadapter.Source) StatsRepository {
 }
 
 func (r *statsRepo) RecordLogin(ctx context.Context, count int) error {
-	return r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+	return r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Handle) error {
 		return a.Exec(ctx, `INSERT INTO events (type, count) VALUES (?, ?)`, "login", count)
 	})
 }
 
 func (r *statsRepo) LoginCount(ctx context.Context) (int, error) {
 	var count int
-	err := r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+	err := r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Handle) error {
 		return a.Get(ctx, &count, `SELECT count FROM events WHERE type = 'login'`)
 	})
 	return count, err
@@ -104,7 +104,7 @@ func (r *directoryRepo) FindName(ctx context.Context, id string) (string, error)
 	var resp struct {
 		Name string `json:"name"`
 	}
-	err := r.source.Run(ctx, func(ctx context.Context, a restadapter.Adaptor) error {
+	err := r.source.Run(ctx, func(ctx context.Context, a restadapter.Handle) error {
 		return a.Get(ctx, "/directory/"+id, &resp)
 	})
 	return resp.Name, err

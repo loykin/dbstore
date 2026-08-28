@@ -43,7 +43,7 @@ func setupStore(ctx context.Context) (UserRepository, func(), error) {
 		return nil, nil, err
 	}
 
-	repo := NewUserRepo[sqlxadapter.Adaptor](SqliteUserTemplate{}, sql.Source("primary"))
+	repo := NewSqliteUserRepository(sql.Source("primary"))
 	return repo, cleanup, nil
 }
 

@@ -11,7 +11,7 @@ import (
 	"github.com/loykin/dbstore"
 )
 
-func newTestAdaptorClient(t *testing.T, handler http.HandlerFunc) Adaptor {
+func newTestHandleClient(t *testing.T, handler http.HandlerFunc) Handle {
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
@@ -19,11 +19,11 @@ func newTestAdaptorClient(t *testing.T, handler http.HandlerFunc) Adaptor {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Adaptor{c: &Client{HTTPClient: server.Client(), BaseURL: baseURL}}
+	return Handle{c: &Client{HTTPClient: server.Client(), BaseURL: baseURL}}
 }
 
-func TestAdaptor_Get_NotFoundTranslatesToErrNotFound(t *testing.T) {
-	a := newTestAdaptorClient(t, func(w http.ResponseWriter, r *http.Request) {
+func TestHandle_Get_NotFoundTranslatesToErrNotFound(t *testing.T) {
+	a := newTestHandleClient(t, func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 	})
 	var dest struct{ Name string }
@@ -33,8 +33,8 @@ func TestAdaptor_Get_NotFoundTranslatesToErrNotFound(t *testing.T) {
 	}
 }
 
-func TestAdaptor_Get_OtherStatusPassesThrough(t *testing.T) {
-	a := newTestAdaptorClient(t, func(w http.ResponseWriter, r *http.Request) {
+func TestHandle_Get_OtherStatusPassesThrough(t *testing.T) {
+	a := newTestHandleClient(t, func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	})
 	var dest struct{ Name string }
@@ -48,9 +48,9 @@ func TestAdaptor_Get_OtherStatusPassesThrough(t *testing.T) {
 	}
 }
 
-func TestAdaptor_Post(t *testing.T) {
+func TestHandle_Post(t *testing.T) {
 	var gotBody string
-	a := newTestAdaptorClient(t, func(w http.ResponseWriter, r *http.Request) {
+	a := newTestHandleClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method = %s, want POST", r.Method)
 		}

@@ -30,7 +30,7 @@ func TestSource_RunTx(t *testing.T) {
 	exec := adapter.Executor()
 	source := NewSource("primary", exec)
 
-	if err := source.Run(ctx, func(ctx context.Context, a Adaptor) error {
+	if err := source.Run(ctx, func(ctx context.Context, a Handle) error {
 		return a.Exec(ctx, `CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)`)
 	}); err != nil {
 		t.Fatal(err)
@@ -44,7 +44,7 @@ func TestSource_RunTx(t *testing.T) {
 	}
 
 	var count int
-	if err := source.Run(ctx, func(ctx context.Context, a Adaptor) error {
+	if err := source.Run(ctx, func(ctx context.Context, a Handle) error {
 		return a.Get(ctx, &count, `SELECT COUNT(*) FROM users`)
 	}); err != nil {
 		t.Fatal(err)

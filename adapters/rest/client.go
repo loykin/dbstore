@@ -88,7 +88,7 @@ func (c *Client) DoJSON(ctx context.Context, method, requestPath string, request
 }
 
 // StatusError is returned by DoJSON when the server responds with a
-// non-2xx status. Adaptor.Get uses StatusCode to translate a 404 into
+// non-2xx status. Handle.Get uses StatusCode to translate a 404 into
 // dbstore.ErrNotFound; other callers can match on StatusCode the same way
 // instead of parsing the error string.
 type StatusError struct {

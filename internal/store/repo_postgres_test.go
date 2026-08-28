@@ -110,7 +110,7 @@ func TestUserRepoCompliance_Postgres(t *testing.T) {
 
 	exec := NewExecutor(pool)
 
-	dbstoretest.RunComplianceSuite(t, []dbstoretest.Fixture[userRepoFixture]{
+	dbstoretest.RunComplianceSuite(t, []dbstoretest.Fixture[userRepoFixture, userRepoCapabilities]{
 		{
 			Name: "Postgres",
 			New: func(t *testing.T) userRepoFixture {
@@ -131,7 +131,7 @@ func TestUserRepoCompliance_Postgres(t *testing.T) {
 					ph:     func(n int) string { return "$1" },
 				}
 			},
-			Caps: dbstoretest.Capabilities{AtomicBatch: true},
+			Caps: userRepoCapabilities{AtomicBatch: true},
 		},
 	}, runUserRepoComplianceSuite)
 }

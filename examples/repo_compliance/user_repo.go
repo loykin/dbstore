@@ -11,9 +11,9 @@ type User struct {
 }
 
 // UserRepository is the one contract both backends implement. The
-// compliance suite in main_test.go only ever calls these four methods, so
-// it runs unchanged against either implementation — the concrete proof for
-// the root README's "Why" claim.
+// compliance suite in user_repo_compliance_test.go only ever calls these four
+// methods, so it runs unchanged against either implementation — the concrete
+// proof for the root README's "Why" claim.
 type UserRepository interface {
 	Create(ctx context.Context, name string) error
 	FindByID(ctx context.Context, id int) (*User, error)

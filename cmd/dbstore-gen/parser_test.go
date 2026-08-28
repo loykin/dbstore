@@ -43,10 +43,14 @@ func TestParseInterface_ExtractsMethodsSortedByName(t *testing.T) {
 	}
 }
 
-func TestParseInterface_RejectsVariadic(t *testing.T) {
-	_, err := parseInterface(fixtureFile, "VariadicRepository")
-	if err == nil || !strings.Contains(err.Error(), "variadic") {
-		t.Fatalf("err = %v, want variadic rejection", err)
+func TestParseInterface_SupportsVariadic(t *testing.T) {
+	iface, err := parseInterface(fixtureFile, "VariadicRepository")
+	if err != nil {
+		t.Fatal(err)
+	}
+	param := iface.Methods[0].Params[0]
+	if !param.Variadic || param.Type != "string" {
+		t.Fatalf("param = %+v, want variadic string", param)
 	}
 }
 
@@ -57,10 +61,13 @@ func TestParseInterface_RejectsMoreThanTwoReturns(t *testing.T) {
 	}
 }
 
-func TestParseInterface_RejectsNamedReturns(t *testing.T) {
-	_, err := parseInterface(fixtureFile, "NamedReturnRepository")
-	if err == nil || !strings.Contains(err.Error(), "named return") {
-		t.Fatalf("err = %v, want named-return rejection", err)
+func TestParseInterface_SupportsNamedReturns(t *testing.T) {
+	iface, err := parseInterface(fixtureFile, "NamedReturnRepository")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !iface.Methods[0].HasValue || iface.Methods[0].ValueType != "*User" {
+		t.Fatalf("method = %+v, want (*User, error)", iface.Methods[0])
 	}
 }
 
@@ -71,10 +78,19 @@ func TestParseInterface_RejectsMissingContext(t *testing.T) {
 	}
 }
 
-func TestParseInterface_RejectsEmbeddedInterface(t *testing.T) {
-	_, err := parseInterface(fixtureFile, "EmbeddingRepository")
-	if err == nil || !strings.Contains(err.Error(), "embeds another interface") {
-		t.Fatalf("err = %v, want embedding rejection", err)
+func TestParseInterface_SupportsEmbeddedInterface(t *testing.T) {
+	iface, err := parseInterface(fixtureFile, "EmbeddingRepository")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Create", "CreateBatch", "Extra", "FindByID"}
+	if len(iface.Methods) != len(want) {
+		t.Fatalf("methods = %+v, want %v", iface.Methods, want)
+	}
+	for i, method := range iface.Methods {
+		if method.Name != want[i] {
+			t.Fatalf("method[%d] = %q, want %q", i, method.Name, want[i])
+		}
 	}
 }
 

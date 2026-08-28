@@ -7,6 +7,124 @@ whether the client is a `*sql.DB`, an HTTP client, or an OpenSearch SDK
 client. See "Guarantees" below for exactly what that lifecycle handling
 promises.
 
+## Start Here: What You Actually Build
+
+Choose the path based on the problem you have:
+
+| Situation | Recommended path |
+|---|---|
+| One repository, one backend | Write the repository directly; see "Single-Backend Quick Start" |
+| One repository contract implemented by two or more backends | Use `dbstore-gen`; follow the workflow below |
+| Only named client lifecycle/throttling is needed | Use `Adapter` and `Executor`; no repository generator is required |
+
+The generator path is the main repository-portability workflow. You write the
+domain decisions; dbstore writes the delegation and construction boilerplate.
+
+### 1. Write the domain interface
+
+```go
+// user_repo.go
+package users
+
+import "context"
+
+//go:generate go tool dbstore-gen -config user_repo.gen.yaml
+
+type UserRepository interface {
+	Create(ctx context.Context, name string) error
+	FindByID(ctx context.Context, id int) (*User, error)
+}
+```
+
+### 2. List the implementations to generate
+
+```yaml
+# user_repo.gen.yaml
+interface: UserRepository
+source: user_repo.go
+test: true
+backends:
+  - name: sqlite
+    adapter: sqlite
+  - name: rest
+    adapter: rest
+```
+
+Install and run the generator:
+
+```bash
+go get -tool github.com/loykin/dbstore/cmd/dbstore-gen@latest
+go generate ./...
+```
+
+The resulting files have explicit ownership:
+
+| File | Owner | What to do |
+|---|---|---|
+| `user_repo.go` | You | Define domain types and `UserRepository` |
+| `user_repo.gen.yaml` | You | Declare the interface and backend list |
+| `user_repo_gen.go` | Generator | Do not edit; delegation and type checks |
+| `user_repo_sqlite.go` | You after first generation | Fill the generated `TODO` method bodies |
+| `user_repo_rest.go` | You after first generation | Fill the generated `TODO` method bodies |
+| `user_repo_compliance_test.go` | You after first generation | Write shared behavioral assertions and capability rules |
+| `user_repo_sqlite_test.go` | You after first generation | Build the SQLite fixture and set its capabilities |
+| `user_repo_rest_test.go` | You after first generation | Build the REST fixture and set its capabilities |
+| `user_repo_compliance_gen_test.go` | Generator | Do not edit; registers every configured backend fixture |
+
+Generated glue and the fixture registry are overwritten safely. Backend,
+compliance-suite, and fixture skeletons are created only once, so later
+generation never overwrites your implementations or assertions. Adding a
+backend to the YAML regenerates the registry and creates its missing fixture
+stub, which prevents a configured backend from being silently omitted from the
+shared suite.
+
+### 3. Fill only the backend behavior
+
+The generated backend file already contains the type, method signatures, and
+application-facing constructor. Replace the `panic` bodies with backend logic:
+
+```go
+type SqliteUserBackend struct{}
+
+func NewSqliteUserRepository(source sqlxadapter.Source) UserRepository {
+	return NewUserRepo[sqlxadapter.Handle](SqliteUserBackend{}, source)
+}
+
+func (SqliteUserBackend) FindByID(
+	ctx context.Context,
+	h sqlxadapter.Handle,
+	id int,
+) (*User, error) {
+	var user User
+	err := h.Get(ctx, &user, `SELECT id, name FROM users WHERE id = ?`, id)
+	return &user, err
+}
+```
+
+The generic call inside `NewSqliteUserRepository` is generated boilerplate.
+Application setup does not use `Runner`, `Handle` type arguments, or generated
+wrapper types.
+
+### 4. Construct and use the repository
+
+```go
+sql := sqlxadapter.New()
+sql.RegisterDefaultDrivers()
+defer sql.Close()
+
+if err := sql.Open("primary", cfg); err != nil {
+	return err
+}
+
+users := NewSqliteUserRepository(sql.Source("primary"))
+user, err := users.FindByID(ctx, 1)
+```
+
+At this boundary the application sees only its `UserRepository`, the generated
+backend constructor, and the named source. See
+[`docs/repository-pattern.md`](docs/repository-pattern.md) for transactions,
+not-found behavior, and the shared compliance-suite pattern.
+
 ## Why
 
 Most Go services eventually need more than one named connection to more
@@ -26,9 +144,9 @@ to leak the moment two backends diverge in how they actually work.
 Every backend implementation of a repository has the same shape: a
 `Source` field — **never embedded**, always named, so its `Run` method
 can't get promoted onto the repository and leak infra access past the
-repository's own interface — handing a backend-specific `Adaptor` (never
+repository's own interface — handing a backend-specific `Handle` (never
 the raw client) into a callback. Swapping the backend only ever changes
-which `Adaptor` type is in play, never the shape of the repository. That
+which `Handle` type is in play, never the shape of the repository. That
 means one behavioral test suite, written once against the repository's
 interface, can run unchanged against every implementation. This is the
 scenario it targets:
@@ -41,11 +159,15 @@ type UserRepository interface {
 	FindAll(ctx context.Context) ([]User, error)
 }
 
+type userRepoCapabilities struct {
+	AtomicBatch bool
+}
+
 // One suite, also owned by the application — dbstore doesn't know your
 // repository's contract, so it can't write the assertions for you, only
 // the loop that runs them per backend (see dbstoretest below). caps gates
 // assertions not every backend can honor (e.g. transactional atomicity).
-func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRepository, caps dbstoretest.Capabilities) {
+func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRepository, caps userRepoCapabilities) {
 	t.Run("Create_and_FindByID", func(t *testing.T) {
 		repo := newRepo(t)
 		require.NoError(t, repo.Create(ctx, "Alice"))
@@ -62,17 +184,18 @@ func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRep
 	// ...
 }
 
-// Run against every backend:
-func TestUserRepo(t *testing.T) {
-	dbstoretest.RunComplianceSuite(t, []dbstoretest.Fixture[UserRepository]{
-		{Name: "SQLite", New: sqliteFixture, Caps: dbstoretest.Capabilities{AtomicBatch: true}},
-		{Name: "Postgres", New: postgresFixture, Caps: dbstoretest.Capabilities{AtomicBatch: true}},
-	}, runUserRepoComplianceSuite)
+// Each user-owned backend fixture declares construction and capabilities:
+var sqliteUserFixture = dbstoretest.Fixture[UserRepository, userRepoCapabilities]{
+	Name: "SQLite", New: sqliteFixture,
+	Caps: userRepoCapabilities{AtomicBatch: true},
 }
+
+// With test: true, dbstore-gen writes TestUserRepoCompliance in
+// user_repo_compliance_gen_test.go and registers every configured fixture.
 ```
 
 `sqliteFixture` and `postgresFixture` are closures that construct the same
-repository type over a different backend `Adaptor` — `sqlxadapter.Adaptor`
+repository type over a different backend `Handle` — `sqlxadapter.Handle`
 in both cases here, since dialect differences are absorbed inside the
 adapter (see "SQL Adapter" below). dbstore's own tests run this same suite
 against both a real SQLite database and a PostgreSQL container
@@ -83,8 +206,8 @@ integration` build tag the SQLite one doesn't).
 `examples/repo_compliance` goes one step further, taking the backend
 outside a single family: the same `runUserRepoComplianceSuite` runs,
 completely unchanged, against a SQLite-backed `UserRepository` and a
-REST-backed one hitting a fake JSON API — `sqlxadapter.Adaptor` vs
-`restadapter.Adaptor`. Transactional rollback isn't asserted for the REST
+REST-backed one hitting a fake JSON API — `sqlxadapter.Handle` vs
+`restadapter.Handle`. Transactional rollback isn't asserted for the REST
 fixture, since REST has no transaction concept; its `Fixture.Caps` simply
 leaves `AtomicBatch` false and the suite skips that one assertion for it —
 see "Code Generator And Capabilities" below.
@@ -115,7 +238,11 @@ whether `T` is `*sql.DB`, an HTTP client, or an OpenSearch SDK client. See
   behaves like the first, at which point either the tests diverge or someone
   builds most of `Source[T]`/`Directory[T]` anyway.
 
-## Quick Start
+## Single-Backend Quick Start
+
+Use this direct form when repository portability is not needed. Here the
+repository struct and methods are intentionally hand-written; `dbstore-gen` is
+not involved.
 
 ```bash
 go get github.com/loykin/dbstore
@@ -143,21 +270,21 @@ type userRepo struct {
 	source sqlxadapter.Source
 }
 
-func NewUserRepo(exec *dbstore.Executor[*sqlx.DB], source string) *userRepo {
-	return &userRepo{source: sqlxadapter.NewSource(source, exec)}
+func NewUserRepo(source sqlxadapter.Source) *userRepo {
+	return &userRepo{source: source}
 }
 
 func (r *userRepo) Create(ctx context.Context, name string) error {
-	// a is a sqlxadapter.Adaptor, not a *sqlx.DB — it owns dialect rebinding
+	// a is a sqlxadapter.Handle, not a *sqlx.DB — it owns dialect rebinding
 	// and sql.ErrNoRows translation so repository code never touches either.
-	return r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+	return r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Handle) error {
 		return a.Exec(ctx, `INSERT INTO users (name) VALUES (?)`, name)
 	})
 }
 
 func (r *userRepo) FindByID(ctx context.Context, id int) (string, error) {
 	var name string
-	err := r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+	err := r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Handle) error {
 		return a.Get(ctx, &name, `SELECT name FROM users WHERE id = ?`, id)
 	})
 	return name, err
@@ -194,7 +321,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	users := NewUserRepo(exec, "primary")
+	users := NewUserRepo(sql.Source("primary"))
 	if err := users.Create(ctx, "Alice"); err != nil {
 		log.Fatal(err)
 	}
@@ -222,7 +349,7 @@ flowchart TD
     C["Directory[T]<br/>lifecycle + per-source concurrency throttle"]
     D["Executor[T]<br/>scoped, throttled access to a named client"]
     E["adapter Source<br/>named field on a repository, never embedded"]
-    H["Adaptor<br/>backend-specific handle Source.Run hands to a callback — never the raw client"]
+    H["Handle<br/>backend-specific handle Source.Run hands to a callback — never the raw client"]
     F[Repository Implementation]
     G[Repository Interface]
 
@@ -230,9 +357,9 @@ flowchart TD
 ```
 
 Each layer depends only on the one below it — a repository implementation
-touches its `Adaptor`, never `*sqlx.DB`/`*restadapter.Client` directly; a
-`Template` (see "Code Generator And Capabilities" below) touches its
-`Adaptor`, never `Directory`/`Executor` internals. The application owns
+touches its `Handle`, never `*sqlx.DB`/`*restadapter.Client` directly; a
+`Backend` (see "Code Generator And Capabilities" below) touches its
+`Handle`, never `Directory`/`Executor` internals. The application owns
 repository interfaces, repository implementations, and backend-specific
 operations. dbstore owns source registration, lifecycle, throttling, and
 scoped client access, and stops there. Everything below — `Config` files,
@@ -304,7 +431,7 @@ github.com/loykin/dbstore/adapters/opensearch    OpenSearch adapter
 github.com/loykin/dbstore/adapters/elasticsearch Elasticsearch adapter
 github.com/loykin/dbstore/adapters/prometheus    Prometheus dbstore.Observer
 github.com/loykin/dbstore/dbstoretest            compliance-suite-per-fixture test helper
-github.com/loykin/dbstore/cmd/dbstore-gen        domain interface -> Template/wrapper generator
+github.com/loykin/dbstore/cmd/dbstore-gen        domain interface -> Backend/wrapper generator
 github.com/loykin/dbstore/mcpserver              embeddable MCP server for SQL sources
 github.com/loykin/dbstore/cmd/dbstore-mcp        ready-to-run MCP STDIO server
 ```
@@ -475,26 +602,24 @@ There are two levels of `Source`:
   writing a custom backend adapter, or as a deliberate escape hatch (see
   the FAQ below).
 - **An adapter `Source`** (`sqlxadapter.Source`, `restadapter.Source`, ...)
-  wraps `dbstore.Source[T]` and hands the callback an **`Adaptor`** instead
+  wraps `dbstore.Source[T]` and hands the callback a **`Handle`** instead
   — a backend-specific type that owns dialect/protocol details (SQL
   rebinding, not-found translation) so repository code never imports
   `database/sql` or a protocol package directly. This is what repository
   code should use.
 
 ```go
-exec := sql.Executor()
-
 type userRepo struct {
 	source sqlxadapter.Source
 }
 
-func NewUserRepo(exec *dbstore.Executor[*sqlx.DB]) *userRepo {
-	return &userRepo{source: sqlxadapter.NewSource("primary", exec)}
+func NewUserRepo(source sqlxadapter.Source) *userRepo {
+	return &userRepo{source: source}
 }
 
 func (r *userRepo) FindName(ctx context.Context, id int) (string, error) {
 	var name string
-	err := r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+	err := r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Handle) error {
 		return a.Get(ctx, &name, `SELECT name FROM users WHERE id = $1`, id)
 	})
 	return name, err
@@ -546,24 +671,16 @@ sqlxadapter.DriverMariaDB    -> database/sql driver "mysql"
 sqlxadapter.DriverClickHouse -> database/sql driver "clickhouse"
 ```
 
-For repositories that need transactions, keep a `sqlxadapter.Source` field.
+Transactional behavior belongs in the SQL `RepoBackend`, expressed through
+`Handle.WithTx`. The domain repository interface remains transaction-free.
 
 ```go
-type accountRepo struct {
-	source sqlxadapter.Source
-}
-
-func NewAccountRepo(exec *dbstore.Executor[*sqlx.DB], source string) *accountRepo {
-	return &accountRepo{source: sqlxadapter.NewSource(source, exec)}
-}
-
-func (r *accountRepo) Transfer(ctx context.Context, from, to int, amount int64) error {
-	return r.source.RunTx(ctx, func(ctx context.Context, tx *sqlx.Tx) error {
-		if _, err := tx.ExecContext(ctx, `UPDATE accounts SET balance = balance - $1 WHERE id = $2`, amount, from); err != nil {
+func (SqliteAccountBackend) Transfer(ctx context.Context, h sqlxadapter.Handle, from, to int, amount int64) error {
+	return h.WithTx(ctx, func(tx sqlxadapter.TxHandle) error {
+		if err := tx.Exec(ctx, `UPDATE accounts SET balance = balance - ? WHERE id = ?`, amount, from); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `UPDATE accounts SET balance = balance + $1 WHERE id = $2`, amount, to)
-		return err
+		return tx.Exec(ctx, `UPDATE accounts SET balance = balance + ? WHERE id = ?`, amount, to)
 	})
 }
 ```
@@ -637,18 +754,18 @@ type documentRepo struct {
 	index  string
 }
 
-func NewDocumentRepo(exec *dbstore.Executor[*restadapter.Client], source, index string) *documentRepo {
+func NewDocumentRepo(source restadapter.Source, index string) *documentRepo {
 	return &documentRepo{
-		source: restadapter.NewSource(source, exec),
+		source: source,
 		index:  index,
 	}
 }
 
 func (r *documentRepo) Create(ctx context.Context, id, name string) error {
-	// a is a restadapter.Adaptor — Post/Put/Get/Delete already translate a
+	// a is a restadapter.Handle — Post/Put/Get/Delete already translate a
 	// 404 into dbstore.ErrNotFound, so repository code doesn't inspect
 	// *restadapter.StatusError itself.
-	return r.source.Run(ctx, func(ctx context.Context, a restadapter.Adaptor) error {
+	return r.source.Run(ctx, func(ctx context.Context, a restadapter.Handle) error {
 		return a.Put(ctx, "/"+r.index+"/_create/"+id, Document{Name: name})
 	})
 }
@@ -657,6 +774,10 @@ func (r *documentRepo) Create(ctx context.Context, id, name string) error {
 ## Repository Contracts
 
 dbstore does not define repository contracts. Applications do.
+
+For the complete recommended workflow—from the domain interface through
+generated backend implementations and the shared compliance suite—see
+[`docs/repository-pattern.md`](docs/repository-pattern.md).
 
 ```go
 type UserRepository interface {
@@ -668,7 +789,7 @@ type UserRepository interface {
 Each backend implementation keeps the source that matches its client type
 (see "Why" above for what running one compliance suite against all of them
 buys you). `github.com/loykin/dbstore/dbstoretest` provides
-`RunComplianceSuite` and `Fixture[R]` for the "run this suite once per named
+`RunComplianceSuite` and `Fixture[R, C]` for the "run this suite once per named
 fixture" loop — it doesn't know your contract or write assertions for you,
 only the loop. `examples/repo_compliance` is a full, runnable version of
 this: one `UserRepository`, a SQLite-backed and a REST-backed
@@ -679,7 +800,7 @@ implementation, and one test suite run against both via
 
 For a `UserRepository`-shaped contract that gets implemented against
 several backends, hand-writing the delegation between the domain interface
-and each `Adaptor` is a repetitive, easy-to-typo translation — exactly the
+and each `Handle` is a repetitive, easy-to-typo translation — exactly the
 kind of thing worth generating instead of copying by hand. `cmd/dbstore-gen`
 mirrors a hand-written domain interface into that glue:
 
@@ -696,6 +817,7 @@ go get -tool github.com/loykin/dbstore/cmd/dbstore-gen@<version>
 # user_repo.gen.yaml
 interface: UserRepository
 source: user_repo.go
+test: true
 backends:
   - name: sqlite
     adapter: github.com/loykin/dbstore/adapters/sqlx
@@ -717,37 +839,54 @@ name-suffix heuristic; that guess was quietly wrong exactly when it
 mattered (the file's only interface being the wrong one), so it was removed
 in favor of always reading it from a config or flag a human wrote down.
 
-This generates, once per run, `user_repo_gen.go` — a `UserRepoTemplate[A]`
+This generates, once per run, `user_repo_gen.go` — a `UserRepoBackend[A]`
 interface plus the generic `userRepo[A]` wrapper that delegates every
 `UserRepository` method through `dbstore.Call`/`dbstore.Exec` — and, the
-first time only, one Template stub per backend with method signatures
-already filled in and `panic("TODO: implement")` bodies for you to replace.
-The generated file is always safe to regenerate; the stub files are never
-touched again after that first run — see `AGENTS.md`'s "Adding a domain
-repository" section for the full workflow, including what happens when the
-domain interface later gains a method. Generation reports which existing
-Templates are incomplete before changing any files; after those methods are
-implemented, rerunning updates the glue and scaffolds any newly configured
-backends. `examples/repository` and `examples/repo_compliance` are
-complete, runnable versions of this generated pattern, each with a
-committed `user_repo.gen.yaml`.
+first time only, one Backend stub per backend with method signatures already
+filled in and `panic("TODO: implement")` bodies for you to replace.
+
+With `test: true`, it also creates an application-owned compliance-suite
+skeleton and one application-owned fixture stub per backend, while regenerating
+`user_repo_compliance_gen_test.go` on every run. That generated registry is the
+only fixture list: adding a backend in YAML therefore cannot leave it out of
+the suite accidentally. The generator never overwrites the suite, fixture, or
+Backend implementation files.
+
+The generated files are always safe to regenerate. If the domain interface
+later gains a method, generation stops before writing and prints copy-ready
+method stubs for every incomplete existing Backend. Implement those methods,
+then rerun generation to update the glue and scaffold newly configured
+backends. Embedded interfaces, named results, and a variadic final parameter
+are supported; methods must still take `context.Context` first and return
+either `error` or `(value, error)`. See `AGENTS.md`'s "Adding a domain
+repository" section for the full workflow. `examples/repository` and
+`examples/repo_compliance` are complete, runnable versions with committed
+configs.
 
 The tool dependency keeps generation reproducible without requiring a global
 binary installation.
 
-`dbstoretest.Fixture[R]` carries a `Capabilities` value (currently just
-`AtomicBatch`) alongside its `New` constructor, so one compliance suite can
-assert a guarantee — like "`CreateBatch` rolls back completely on failure"
+`dbstoretest.Fixture[R, C]` carries an application-owned capability value
+alongside its `New` constructor, so one compliance suite can assert a
+guarantee — like "`CreateBatch` rolls back completely on failure"
 — only against the fixtures whose backend can actually honor it, instead of
 either failing the fixtures that can't or silently never checking the ones
-that can:
+that can. The application defines `C` because optional guarantees belong to
+its repository contract; dbstoretest only passes the value through:
 
 ```go
-dbstoretest.RunComplianceSuite(t, []dbstoretest.Fixture[UserRepository]{
-	{Name: "SQLite", New: sqliteFixture, Caps: dbstoretest.Capabilities{AtomicBatch: true}},
-	{Name: "REST", New: restFixture}, // Caps left zero-value: no transaction concept
-}, runUserRepoComplianceSuite)
+var sqliteUserFixture = dbstoretest.Fixture[UserRepository, userRepoCapabilities]{
+	Name: "SQLite", New: sqliteFixture,
+	Caps: userRepoCapabilities{AtomicBatch: true},
+}
+
+var restUserFixture = dbstoretest.Fixture[UserRepository, userRepoCapabilities]{
+	Name: "REST", New: restFixture, // Caps zero-value: no transaction concept
+}
 ```
+
+`dbstore-gen` places both variables in the generated fixture registry; the
+application only fills their constructors, capabilities, and shared assertions.
 
 ## OpenSearch And Elasticsearch
 
@@ -765,7 +904,7 @@ err := search.Open("primary", dbstore.SourceConfig{
 })
 ```
 
-Repositories use `opensearchadapter.Adaptor`/`elasticsearchadapter.Adaptor`,
+Repositories use `opensearchadapter.Handle`/`elasticsearchadapter.Handle`,
 not the SDK client directly — neither has a `WithTx`, since neither backend
 has a transaction concept, so that capability simply isn't in the type's
 method set:
@@ -778,7 +917,7 @@ type documentRepo struct {
 
 func (r *documentRepo) FindByID(ctx context.Context, id string) (*Document, error) {
 	var doc Document
-	err := r.source.Run(ctx, func(ctx context.Context, a opensearchadapter.Adaptor) error {
+	err := r.source.Run(ctx, func(ctx context.Context, a opensearchadapter.Handle) error {
 		return a.Get(ctx, r.index, id, &doc) // 404/missing -> dbstore.ErrNotFound
 	})
 	return &doc, err
@@ -929,7 +1068,7 @@ first use and tearing it down when the tenant disconnects.
 
 ```go
 sql.Open("tenant-"+id, cfg)
-repo := NewUserRepo(exec, "tenant-"+id)
+repo := NewUserRepo(sql.Source("tenant-" + id))
 
 // ...later, when the tenant is done:
 err := sql.Remove("tenant-" + id)
@@ -949,11 +1088,11 @@ examples/rest              custom REST driver registration with restadapter
 examples/custom_adapter    custom backend client registration with dbstore.NewAdapter[T]
 examples/opensearch        OpenSearch SDK client registration
 examples/elasticsearch     Elasticsearch SDK client registration
-examples/repository        dbstore-gen generated UserRepository over sqlxadapter.Adaptor
+examples/repository        dbstore-gen generated UserRepository over sqlxadapter.Handle
 examples/multi_db          multiple named SQL sources
 examples/sqlite_concurrent SQLite concurrency throttling
 examples/config            Config-driven setup spanning SQL and REST sources
-examples/repo_compliance   dbstore-gen generated UserRepository, SQLite + REST, one Capabilities-gated suite
+examples/repo_compliance   dbstore-gen generated UserRepository, SQLite + REST, one capability-gated suite
 examples/prometheus        SetObserver wired to Prometheus metrics
 ```
 
@@ -962,13 +1101,13 @@ examples/prometheus        SetObserver wired to Prometheus metrics
 ```text
 dbstore.go             public core API
 internal/store         core implementation (Runner[T], Exec/Call, ErrNotFound live here)
-adapters/sqlx          SQL/sqlx adapter, Source, Adaptor/TxAdaptor, pool config
-adapters/rest          REST adapter, Source, Adaptor, client helpers
-adapters/opensearch    OpenSearch adapter, driver, Source, Adaptor
-adapters/elasticsearch Elasticsearch adapter, driver, Source, Adaptor
+adapters/sqlx          SQL/sqlx adapter, Source, Handle/TxHandle, pool config
+adapters/rest          REST adapter, Source, Handle, client helpers
+adapters/opensearch    OpenSearch adapter, driver, Source, Handle
+adapters/elasticsearch Elasticsearch adapter, driver, Source, Handle
 adapters/prometheus    Observer implementation backed by Prometheus metrics
-dbstoretest            RunComplianceSuite/Fixture[R]/Capabilities test helper
-cmd/dbstore-gen        domain interface -> Template[A]/generic wrapper generator
+dbstoretest            RunComplianceSuite/Fixture[R,C] test helper
+cmd/dbstore-gen        domain interface -> RepoBackend[A]/generic wrapper generator
 examples               runnable examples
 ```
 
@@ -976,27 +1115,27 @@ examples               runnable examples
 
 **How do I run operations across two repositories in one transaction?**
 
-dbstore doesn't provide this through `Adaptor` — each repository's `source`
+dbstore doesn't provide this through `Handle` — each repository's `source`
 field is private, so a use case coordinating two repositories has no
-`Adaptor`/`TxAdaptor` value to hand to both of them. That's intentional:
+`Handle`/`TxHandle` value to hand to both of them. That's intentional:
 dbstore stops at lifecycle and scoped access, and cross-repository
 transaction coordination is operation semantics, which it deliberately
 leaves to the application (see "Why").
 
 The fix is to add a second, explicitly-lower-level method that takes a raw
-`*sqlx.Tx` instead of going through `Adaptor` — a deliberate, visible
+`*sqlx.Tx` instead of going through `Handle` — a deliberate, visible
 bypass, not a default path. `sqlxadapter.RunTx` (a free function, unrelated
-to `Adaptor.WithTx`) is kept exactly for this:
+to `Handle.WithTx`) is kept exactly for this:
 
 ```go
-// Normal path: Source.Run hands it a sqlxadapter.Adaptor.
+// Normal path: Source.Run hands it a sqlxadapter.Handle.
 func (r *userRepo) Create(ctx context.Context, name string) error {
-	return r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Adaptor) error {
+	return r.source.Run(ctx, func(ctx context.Context, a sqlxadapter.Handle) error {
 		return a.Exec(ctx, `INSERT INTO users (name) VALUES (?)`, name)
 	})
 }
 
-// Escape-hatch path: takes a raw *sqlx.Tx directly, bypassing Adaptor —
+// Escape-hatch path: takes a raw *sqlx.Tx directly, bypassing Handle —
 // only a use case coordinating multiple repositories should call this.
 func (r *userRepo) createInTx(ctx context.Context, tx *sqlx.Tx, name string) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO users (name) VALUES (?)`, name)

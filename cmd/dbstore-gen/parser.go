@@ -48,8 +48,9 @@ func interfaceNamesInFile(sourceFile string) ([]string, error) {
 
 // Param is one non-context parameter of a domain interface method.
 type Param struct {
-	Name string
-	Type string
+	Name     string
+	Type     string
+	Variadic bool
 }
 
 // Method is one domain interface method, already validated against the v1
@@ -62,7 +63,7 @@ type Method struct {
 }
 
 // Interface is the parsed, validated shape of the -interface domain
-// contract dbstore-gen mirrors into a Template interface and generic
+// contract dbstore-gen mirrors into a RepoBackend interface and generic
 // wrapper.
 type Interface struct {
 	Name    string
@@ -114,7 +115,7 @@ func parseInterface(sourceFile, ifaceName string) (*Interface, error) {
 	pkg := pkgs[0]
 	// pkg.Errors is deliberately not treated as fatal here: the most common
 	// reason this package fails to type-check is a stale _gen.go from
-	// before -interface's last edit (e.g. a Template no longer implements
+	// before -interface's last edit (e.g. a Backend no longer implements
 	// it) — exactly the case this tool exists to fix by regenerating that
 	// file. Go's type checker still resolves an unrelated, self-contained
 	// interface declaration like ifaceName even when some other file in
@@ -136,9 +137,7 @@ func parseInterface(sourceFile, ifaceName string) (*Interface, error) {
 		return nil, fmt.Errorf("%s is not an interface", ifaceName)
 	}
 
-	if iface.NumExplicitMethods() != iface.NumMethods() {
-		return nil, fmt.Errorf("%s embeds another interface — unsupported in v1, write the Template by hand for this interface", ifaceName)
-	}
+	iface.Complete()
 
 	imports := map[string]string{}
 	usedAliases := map[string]string{
@@ -178,7 +177,7 @@ func parseInterface(sourceFile, ifaceName string) (*Interface, error) {
 		sig := f.Type().(*types.Signature)
 		m, err := parseMethod(name, sig, qualifier)
 		if err != nil {
-			return nil, fmt.Errorf("method %s.%s: %w (write this Template method by hand instead)", ifaceName, name, err)
+			return nil, fmt.Errorf("method %s.%s: %w (write this repository backend method by hand instead)", ifaceName, name, err)
 		}
 		methods = append(methods, m)
 	}
@@ -206,10 +205,6 @@ func uniqueImportAlias(preferred, path string, used map[string]string) string {
 }
 
 func parseMethod(name string, sig *types.Signature, qualifier types.Qualifier) (Method, error) {
-	if sig.Variadic() {
-		return Method{}, fmt.Errorf("variadic parameters are unsupported in v1")
-	}
-
 	params := sig.Params()
 	if params.Len() == 0 {
 		return Method{}, fmt.Errorf("must take context.Context as its first parameter")
@@ -225,7 +220,16 @@ func parseMethod(name string, sig *types.Signature, qualifier types.Qualifier) (
 		if pname == "" {
 			pname = fmt.Sprintf("arg%d", i)
 		}
-		m.Params = append(m.Params, Param{Name: pname, Type: types.TypeString(p.Type(), qualifier)})
+		paramType := p.Type()
+		variadic := sig.Variadic() && i == params.Len()-1
+		if variadic {
+			paramType = paramType.(*types.Slice).Elem()
+		}
+		m.Params = append(m.Params, Param{
+			Name:     pname,
+			Type:     types.TypeString(paramType, qualifier),
+			Variadic: variadic,
+		})
 	}
 
 	results := sig.Results()
@@ -235,9 +239,6 @@ func parseMethod(name string, sig *types.Signature, qualifier types.Qualifier) (
 			return Method{}, fmt.Errorf("single return value must be error, got %s", types.TypeString(results.At(0).Type(), qualifier))
 		}
 	case 2:
-		if results.At(0).Name() != "" || results.At(1).Name() != "" {
-			return Method{}, fmt.Errorf("named return values are unsupported in v1")
-		}
 		if types.TypeString(results.At(1).Type(), qualifier) != "error" {
 			return Method{}, fmt.Errorf("second return value must be error, got %s", types.TypeString(results.At(1).Type(), qualifier))
 		}

@@ -2,6 +2,7 @@
 # out here rather than guessed from file content or CLI flags.
 interface: UserRepository
 source: user_repo.go
+test: true
 backends:
   - name: sqlite
     adapter: github.com/loykin/dbstore/adapters/sqlx

@@ -40,7 +40,7 @@ func setupSQLite(ctx context.Context) (UserRepository, func(), error) {
 
 	exec := sql.Executor()
 	if err := exec.Run(ctx, "primary", func(ctx context.Context, db *sqlx.DB) error {
-		// UNIQUE on name lets main_test.go's CreateBatch_Rollback trigger a
+		// UNIQUE on name lets the shared CreateBatch_Rollback test trigger a
 		// genuine mid-batch failure (a duplicate name) using only the
 		// UserRepository interface, instead of reaching for a
 		// backend-specific type to force one.
@@ -51,7 +51,7 @@ func setupSQLite(ctx context.Context) (UserRepository, func(), error) {
 		return nil, nil, err
 	}
 
-	repo := NewUserRepo[sqlxadapter.Adaptor](SqliteUserTemplate{}, sql.Source("primary"))
+	repo := NewSqliteUserRepository(sql.Source("primary"))
 	return repo, cleanup, nil
 }
 
@@ -70,7 +70,7 @@ func setupREST(baseURL string) (UserRepository, func(), error) {
 		return nil, nil, err
 	}
 
-	repo := NewUserRepo[restadapter.Adaptor](RestUserTemplate{}, rest.Source("primary"))
+	repo := NewRestUserRepository(rest.Source("primary"))
 	return repo, cleanup, nil
 }
 

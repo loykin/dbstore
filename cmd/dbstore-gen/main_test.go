@@ -69,8 +69,57 @@ func TestRun_ConfigDrivesInterfaceSourceAndBackends(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "user_repo_sqlite.go")); err != nil {
 		t.Fatalf("backend stub not created: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "user_repo_gen_test.go")); err != nil {
-		t.Fatalf("test skeleton not created even though config set test: true: %v", err)
+	for _, name := range []string{
+		"user_repo_compliance_test.go",
+		"user_repo_sqlite_test.go",
+		"user_repo_compliance_gen_test.go",
+	} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("%s not created even though config set test: true: %v", name, err)
+		}
+	}
+
+	// Application-owned suite and fixture files survive backend growth, while
+	// the generated registry expands and a new backend fixture is scaffolded.
+	suitePath := filepath.Join(dir, "user_repo_compliance_test.go")
+	sqliteFixturePath := filepath.Join(dir, "user_repo_sqlite_test.go")
+	for _, path := range []string{suitePath, sqliteFixturePath} {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content = append(content, []byte("\n// application-owned marker\n")...)
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	configContent = "interface: UserRepository\nsource: user_repo.go\ntest: true\nbackends:\n  - name: sqlite\n    adapter: sqlite\n  - name: rest\n    adapter: rest\n"
+	if err := os.WriteFile(configPath, []byte(configContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"-config", configPath}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{suitePath, sqliteFixturePath} {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(content), "application-owned marker") {
+			t.Fatalf("application-owned file %s was overwritten", path)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "user_repo_rest_test.go")); err != nil {
+		t.Fatalf("new backend fixture was not scaffolded: %v", err)
+	}
+	registry, err := os.ReadFile(filepath.Join(dir, "user_repo_compliance_gen_test.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range []string{"sqliteUserFixture", "restUserFixture"} {
+		if !strings.Contains(string(registry), fixture) {
+			t.Fatalf("generated registry missing %s\n---\n%s", fixture, registry)
+		}
 	}
 }
 
@@ -136,6 +185,9 @@ func TestRun_InterfaceAndBackendGrowthPreserveExistingImplementation(t *testing.
 	if err == nil || !strings.Contains(err.Error(), "missing methods: Delete") {
 		t.Fatalf("err = %v, want missing Delete diagnostic", err)
 	}
+	if !strings.Contains(err.Error(), "func (SqliteUserBackend) Delete(ctx context.Context, h sqlxadapter.Handle, id int) error") {
+		t.Fatalf("err = %v, want copy-ready Delete stub", err)
+	}
 	genAfterFailure, err := os.ReadFile(genPath)
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +203,7 @@ func TestRun_InterfaceAndBackendGrowthPreserveExistingImplementation(t *testing.
 		t.Fatal("existing backend implementation was overwritten")
 	}
 
-	stubWithDelete := append(preserved, []byte("\nfunc (SqliteUserTemplate) Delete(ctx context.Context, a sqlxadapter.Adaptor, id int) error { return nil }\n")...)
+	stubWithDelete := append(preserved, []byte("\nfunc (SqliteUserBackend) Delete(ctx context.Context, a sqlxadapter.Handle, id int) error { return nil }\n")...)
 	if err := os.WriteFile(stubPath, stubWithDelete, 0o600); err != nil {
 		t.Fatal(err)
 	}

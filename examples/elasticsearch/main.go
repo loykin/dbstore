@@ -29,14 +29,14 @@ func NewDocumentRepo(source elasticsearchadapter.Source, index string) *Document
 }
 
 func (r *DocumentRepo) Save(ctx context.Context, id string, doc Document) error {
-	return r.source.Run(ctx, func(ctx context.Context, a elasticsearchadapter.Adaptor) error {
+	return r.source.Run(ctx, func(ctx context.Context, a elasticsearchadapter.Handle) error {
 		return a.Index(ctx, r.index, id, doc)
 	})
 }
 
 func (r *DocumentRepo) Find(ctx context.Context, id string) (*Document, error) {
 	var doc Document
-	err := r.source.Run(ctx, func(ctx context.Context, a elasticsearchadapter.Adaptor) error {
+	err := r.source.Run(ctx, func(ctx context.Context, a elasticsearchadapter.Handle) error {
 		return a.Get(ctx, r.index, id, &doc)
 	})
 	if errors.Is(err, dbstore.ErrNotFound) {

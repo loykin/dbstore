@@ -1,9 +1,10 @@
 // Command dbstore-gen mirrors a hand-written domain interface into the
-// generic wiring a multi-backend repository needs (Template[A] interface +
-// generic wrapper), and scaffolds a compliance-test skeleton and one
-// Template stub per backend the first time they're needed. It deliberately
-// leaves structural safety to the Go type system and behavioral portability
-// to dbstoretest instead of duplicating either in the generator.
+// generic wiring a multi-backend repository needs (RepoBackend[A] interface +
+// generic wrapper), scaffolds app-owned Backend/compliance/fixture files the
+// first time they are needed, and regenerates the configured fixture registry.
+// It deliberately leaves structural safety to the Go type system and
+// behavioral portability to dbstoretest instead of duplicating either in the
+// generator.
 package main
 
 import (
@@ -36,7 +37,7 @@ func run(args []string) error {
 	ifaceName := fs.String("interface", "", "domain interface name to mirror (required unless -config is used — never inferred)")
 	source := fs.String("source", os.Getenv("GOFILE"), "Go file declaring -interface (defaults to GOFILE under go generate)")
 	out := fs.String("out", "", "output file for the generated glue (default: <source base>_gen.go)")
-	generateTest := fs.Bool("test", false, "create a compliance-test skeleton if it does not exist")
+	generateTest := fs.Bool("test", false, "scaffold app-owned compliance files and generate the backend fixture registry")
 	var backends backendFlags
 	fs.Var(&backends, "backend", "name[:adapter], repeatable; built-ins: sqlite, mysql, postgres, sqlx, rest, opensearch, elasticsearch")
 
@@ -100,22 +101,26 @@ func run(args []string) error {
 
 	sourceBase := strings.TrimSuffix(filepath.Base(effectiveSource), ".go")
 	dir := filepath.Dir(effectiveSource)
-	existingTemplates := make(map[string]bool, len(view.Backends))
+	existingBackends := make(map[string]bool, len(view.Backends))
 	for _, backend := range view.Backends {
-		exists, methods, err := inspectTemplate(dir, backend.TemplateStructName)
+		exists, methods, err := inspectBackend(dir, backend.BackendStructName)
 		if err != nil {
 			return err
 		}
 		if exists {
-			existingTemplates[backend.Name] = true
-			if missing := missingMethodNames(view.Methods, methods); len(missing) > 0 {
-				return fmt.Errorf("backend %q template %s is missing methods: %s; add them to the existing implementation, then regenerate", backend.Name, backend.TemplateStructName, strings.Join(missing, ", "))
+			existingBackends[backend.Name] = true
+			if missing := missingMethods(view.Methods, methods); len(missing) > 0 {
+				names := make([]string, len(missing))
+				for i, method := range missing {
+					names[i] = method.Name
+				}
+				return fmt.Errorf("backend %q implementation %s is missing methods: %s\n\nadd these methods to the existing implementation, then regenerate:\n\n%s", backend.Name, backend.BackendStructName, strings.Join(names, ", "), renderMissingMethodStubs(backend, missing))
 			}
 			continue
 		}
 		stubPath := filepath.Join(dir, sourceBase+"_"+backend.Name+".go")
 		if _, err := os.Stat(stubPath); err == nil {
-			return fmt.Errorf("%s exists but does not declare %s; move it aside or add the expected template type", stubPath, backend.TemplateStructName)
+			return fmt.Errorf("%s exists but does not declare %s; move it aside or add the expected backend type", stubPath, backend.BackendStructName)
 		} else if !os.IsNotExist(err) {
 			return fmt.Errorf("stat %s: %w", stubPath, err)
 		}
@@ -135,15 +140,31 @@ func run(args []string) error {
 	fmt.Println("wrote", outPath)
 
 	if effectiveTest {
-		testPath := filepath.Join(dir, sourceBase+"_gen_test.go")
-		if err := writeIfMissing(testPath, func() ([]byte, error) { return renderTestSkeleton(view) }); err != nil {
+		suitePath := filepath.Join(dir, sourceBase+"_compliance_test.go")
+		if err := writeIfMissing(suitePath, func() ([]byte, error) { return renderComplianceSuiteSkeleton(view) }); err != nil {
 			return err
 		}
+		for _, backend := range view.Backends {
+			fixturePath := filepath.Join(dir, sourceBase+"_"+backend.Name+"_test.go")
+			backendCopy := backend
+			if err := writeIfMissing(fixturePath, func() ([]byte, error) { return renderFixtureStub(view, backendCopy) }); err != nil {
+				return err
+			}
+		}
+		registryPath := filepath.Join(dir, sourceBase+"_compliance_gen_test.go")
+		registryContent, err := renderComplianceRegistry(view)
+		if err != nil {
+			return fmt.Errorf("render %s: %w", registryPath, err)
+		}
+		if err := os.WriteFile(registryPath, registryContent, 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", registryPath, err)
+		}
+		fmt.Println("wrote", registryPath)
 	}
 
 	for _, b := range view.Backends {
-		if existingTemplates[b.Name] {
-			fmt.Println("skip (implemented)", b.TemplateStructName)
+		if existingBackends[b.Name] {
+			fmt.Println("skip (implemented)", b.BackendStructName)
 			continue
 		}
 		stubPath := filepath.Join(dir, sourceBase+"_"+b.Name+".go")
@@ -185,9 +206,9 @@ func parseBackendSpec(spec string) (name, importPath string, err error) {
 
 // writeIfMissing renders and writes content only the first time — a
 // generator that regenerated these files every run would either clobber
-// hand-filled Template bodies or need risky file-merging logic. Once a
+// hand-filled Backend bodies or need risky file-merging logic. Once a
 // backend gains a new interface method, the preflight check reports it before
-// writing; the "var _ ... = XxxTemplate{}" assertion remains a compile-time
+// writing; the "var _ ... = XxxBackend{}" assertion remains a compile-time
 // guard for signature mismatches and manually generated glue.
 func writeIfMissing(path string, render func() ([]byte, error)) error {
 	if _, err := os.Stat(path); err == nil {

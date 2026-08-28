@@ -40,14 +40,14 @@ func TestAdapter_Container(t *testing.T) {
 
 	source := adapter.Source("search")
 
-	err = source.Run(ctx, func(ctx context.Context, a Adaptor) error {
+	err = source.Run(ctx, func(ctx context.Context, a Handle) error {
 		if err := a.Index(ctx, "cs_docs", "1", map[string]string{"name": "Alice"}); err != nil {
 			return err
 		}
 
-		// Adaptor.Index doesn't force a refresh (that's a per-write
-		// performance tradeoff a general-purpose Adaptor shouldn't hardcode
-		// — see adaptor.go), so poll for OpenSearch's near-real-time
+		// Handle.Index doesn't force a refresh (that's a per-write
+		// performance tradeoff a general-purpose Handle shouldn't hardcode
+		// — see handle.go), so poll for OpenSearch's near-real-time
 		// refresh instead of asserting the doc is visible immediately.
 		var doc map[string]string
 		var getErr error

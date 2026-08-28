@@ -37,14 +37,14 @@ func NewDocumentRepo(source opensearchadapter.Source, index string) DocumentRepo
 }
 
 func (r *openSearchDocumentRepo) Create(ctx context.Context, id, name string) error {
-	return r.source.Run(ctx, func(ctx context.Context, a opensearchadapter.Adaptor) error {
+	return r.source.Run(ctx, func(ctx context.Context, a opensearchadapter.Handle) error {
 		return a.Index(ctx, r.index, id, Document{Name: name})
 	})
 }
 
 func (r *openSearchDocumentRepo) FindByID(ctx context.Context, id string) (*Document, error) {
 	var doc Document
-	err := r.source.Run(ctx, func(ctx context.Context, a opensearchadapter.Adaptor) error {
+	err := r.source.Run(ctx, func(ctx context.Context, a opensearchadapter.Handle) error {
 		if getErr := a.Get(ctx, r.index, id, &doc); getErr != nil {
 			return getErr
 		}

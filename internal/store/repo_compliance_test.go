@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/loykin/dbstore/dbstoretest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,15 +21,19 @@ type userRepoFixture struct {
 	ph     func(n int) string
 }
 
+type userRepoCapabilities struct {
+	AtomicBatch bool
+}
+
 // runUserRepoComplianceSuite runs one set of behavioral assertions against
 // any UserRepository implementation. Every backend (SQLite, PostgreSQL, ...)
 // must pass the same suite, so drift between implementations is caught here
 // instead of divergently in backend-specific tests. caps.AtomicBatch gates
-// the CreateBatch_Rollback assertion — the same Capabilities mechanism
+// the CreateBatch_Rollback assertion — the same application-owned capability mechanism
 // examples/repo_compliance uses for its SQL+REST suite, so "does CreateBatch
 // have to be atomic" has one answer per fixture instead of two suites
 // silently disagreeing.
-func runUserRepoComplianceSuite(t *testing.T, setup func(t *testing.T) userRepoFixture, caps dbstoretest.Capabilities) {
+func runUserRepoComplianceSuite(t *testing.T, setup func(t *testing.T) userRepoFixture, caps userRepoCapabilities) {
 	t.Helper()
 	ctx := context.Background()
 

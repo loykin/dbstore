@@ -21,13 +21,13 @@ type UserRepo struct {
 	source restadapter.Source
 }
 
-func NewUserRepo(exec *dbstore.Executor[*restadapter.Client], source string) *UserRepo {
-	return &UserRepo{source: restadapter.NewSource(source, exec)}
+func NewUserRepo(source restadapter.Source) *UserRepo {
+	return &UserRepo{source: source}
 }
 
 func (r *UserRepo) Find(ctx context.Context, id string) (*User, error) {
 	var user User
-	err := r.source.Run(ctx, func(ctx context.Context, a restadapter.Adaptor) error {
+	err := r.source.Run(ctx, func(ctx context.Context, a restadapter.Handle) error {
 		return a.Get(ctx, "/users/"+id, &user)
 	})
 	return &user, err
@@ -65,13 +65,13 @@ type SecretRepo struct {
 	source restadapter.Source
 }
 
-func NewSecretRepo(exec *dbstore.Executor[*restadapter.Client], source string) *SecretRepo {
-	return &SecretRepo{source: restadapter.NewSource(source, exec)}
+func NewSecretRepo(source restadapter.Source) *SecretRepo {
+	return &SecretRepo{source: source}
 }
 
 func (r *SecretRepo) Find(ctx context.Context) (*Secret, error) {
 	var secret Secret
-	err := r.source.Run(ctx, func(ctx context.Context, a restadapter.Adaptor) error {
+	err := r.source.Run(ctx, func(ctx context.Context, a restadapter.Handle) error {
 		return a.Get(ctx, "/secret", &secret)
 	})
 	return &secret, err
@@ -109,8 +109,7 @@ func setupStore(userServerURL, secretServerURL string) (*UserRepo, *SecretRepo, 
 		return nil, nil, nil, err
 	}
 
-	exec := rest.Executor()
-	return NewUserRepo(exec, "users-api"), NewSecretRepo(exec, "secret-api"), cleanup, nil
+	return NewUserRepo(rest.Source("users-api")), NewSecretRepo(rest.Source("secret-api")), cleanup, nil
 }
 
 func main() {

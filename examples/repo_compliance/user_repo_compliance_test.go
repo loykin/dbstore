@@ -3,19 +3,24 @@ package main
 import (
 	"context"
 	"testing"
-
-	"github.com/loykin/dbstore/dbstoretest"
 )
+
+// userRepoCapabilities belongs to the application repository contract, not
+// dbstoretest. Add a flag only when some backends can make a real guarantee
+// that others cannot.
+type userRepoCapabilities struct {
+	AtomicBatch bool
+}
 
 // runUserRepoComplianceSuite asserts the behavior every UserRepository
 // implementation must share. It only calls interface methods — never a
 // backend-specific type — so the same function runs unchanged against the
 // SQLite-backed and REST-backed implementations below. caps.AtomicBatch
-// gates CreateBatch_Rollback: REST has no transaction concept (its Adaptor
+// gates CreateBatch_Rollback: REST has no transaction concept (its Handle
 // has no WithTx at all — see user_repo_rest.go), so its fixture leaves
 // AtomicBatch false and the suite skips that assertion for it instead of
 // either failing REST or silently never checking SQLite's real guarantee.
-func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRepository, caps dbstoretest.Capabilities) {
+func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRepository, caps userRepoCapabilities) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -100,39 +105,4 @@ func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRep
 			}
 		})
 	}
-}
-
-// TestUserRepoCompliance runs the one compliance suite above against both
-// backends via dbstoretest.RunComplianceSuite, instead of a hand-written
-// loop — see the root README's "Why" for what this pattern is for.
-func TestUserRepoCompliance(t *testing.T) {
-	dbstoretest.RunComplianceSuite(t, []dbstoretest.Fixture[UserRepository]{
-		{
-			Name: "SQLite",
-			New: func(t *testing.T) UserRepository {
-				repo, cleanup, err := setupSQLite(context.Background())
-				if err != nil {
-					t.Fatal(err)
-				}
-				t.Cleanup(cleanup)
-				return repo
-			},
-			Caps: dbstoretest.Capabilities{AtomicBatch: true},
-		},
-		{
-			Name: "REST",
-			New: func(t *testing.T) UserRepository {
-				server := newFakeUsersServer()
-				t.Cleanup(server.Close)
-
-				repo, cleanup, err := setupREST(server.URL)
-				if err != nil {
-					t.Fatal(err)
-				}
-				t.Cleanup(cleanup)
-				return repo
-			},
-			// Caps left zero-value: REST has no atomic CreateBatch.
-		},
-	}, runUserRepoComplianceSuite)
 }

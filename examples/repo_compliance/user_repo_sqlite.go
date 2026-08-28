@@ -1,6 +1,6 @@
 // Generated skeleton by dbstore-gen for backend "sqlite" —
 // created once, never overwritten. Fill in the TODO bodies; the signatures
-// already match UserRepoTemplate[sqlxadapter.Adaptor], so a
+// already match UserRepoBackend[sqlxadapter.Handle], so a
 // future UserRepository method addition shows up here as a compile
 // error (see the "var _ ..." assertion in the _gen.go file), not silently.
 
@@ -12,17 +12,21 @@ import (
 	sqlxadapter "github.com/loykin/dbstore/adapters/sqlx"
 )
 
-type SqliteUserTemplate struct{}
+type SqliteUserBackend struct{}
 
-func (SqliteUserTemplate) Create(ctx context.Context, a sqlxadapter.Adaptor, name string) error {
-	return a.Exec(ctx, `INSERT INTO users (name) VALUES (?)`, name)
+func NewSqliteUserRepository(source sqlxadapter.Source) UserRepository {
+	return NewUserRepo[sqlxadapter.Handle](SqliteUserBackend{}, source)
 }
 
-// CreateBatch is atomic here — all-or-nothing via a.WithTx — unlike the
+func (SqliteUserBackend) Create(ctx context.Context, h sqlxadapter.Handle, name string) error {
+	return h.Exec(ctx, `INSERT INTO users (name) VALUES (?)`, name)
+}
+
+// CreateBatch is atomic here — all-or-nothing via h.WithTx — unlike the
 // pre-migration version, which looped Create with no transaction at all.
-// See dbstoretest.Capabilities{AtomicBatch: true} in main_test.go.
-func (SqliteUserTemplate) CreateBatch(ctx context.Context, a sqlxadapter.Adaptor, names []string) error {
-	return a.WithTx(ctx, func(tx sqlxadapter.TxAdaptor) error {
+// See userRepoCapabilities{AtomicBatch: true} in user_repo_sqlite_test.go.
+func (SqliteUserBackend) CreateBatch(ctx context.Context, h sqlxadapter.Handle, names []string) error {
+	return h.WithTx(ctx, func(tx sqlxadapter.TxHandle) error {
 		for _, name := range names {
 			if err := tx.Exec(ctx, `INSERT INTO users (name) VALUES (?)`, name); err != nil {
 				return err
@@ -32,14 +36,14 @@ func (SqliteUserTemplate) CreateBatch(ctx context.Context, a sqlxadapter.Adaptor
 	})
 }
 
-func (SqliteUserTemplate) FindAll(ctx context.Context, a sqlxadapter.Adaptor) ([]User, error) {
+func (SqliteUserBackend) FindAll(ctx context.Context, h sqlxadapter.Handle) ([]User, error) {
 	var users []User
-	err := a.Select(ctx, &users, `SELECT id, name FROM users ORDER BY id`)
+	err := h.Select(ctx, &users, `SELECT id, name FROM users ORDER BY id`)
 	return users, err
 }
 
-func (SqliteUserTemplate) FindByID(ctx context.Context, a sqlxadapter.Adaptor, id int) (*User, error) {
+func (SqliteUserBackend) FindByID(ctx context.Context, h sqlxadapter.Handle, id int) (*User, error) {
 	var u User
-	err := a.Get(ctx, &u, `SELECT id, name FROM users WHERE id = ?`, id)
+	err := h.Get(ctx, &u, `SELECT id, name FROM users WHERE id = ?`, id)
 	return &u, err
 }

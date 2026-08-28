@@ -37,9 +37,10 @@ plus the `NewAdapter`/`NewSource` constructors.
 
 ### The registration → access chain
 
-`DriverBuilder[T] -> Adapter[T] -> Directory[T] -> Executor[T] -> Source[T]
--> Adaptor -> Template -> generated combinator -> application repository`.
-Each layer depends only on the one below it:
+Runtime setup flows from `DriverBuilder[T]` through `Adapter[T]`,
+`Directory[T]`, and `Executor[T]`. A repository call flows in the other
+direction: `application repository -> generated wrapper -> Source -> Handle
+-> RepoBackend`. Each boundary depends only on the layer immediately below it:
 
 - `DriverBuilder[T]` opens one concrete `T` from a `SourceConfig`.
 - `Directory[T]` (`internal/store/directory.go`) owns the name -> client
@@ -57,8 +58,8 @@ Each layer depends only on the one below it:
   `adapters/sqlx/adapter.go`'s doc comment for why.
 - `Source[T]` is the low-level `Runner[T]` core repositories can use
   directly; `sqlxadapter.Source`/`restadapter.Source` wrap it to hand out an
-  `Adaptor` instead of the raw client (see "Adding a domain repository"
-  below). **Never embed a `Source` or `Adaptor` in a repository struct** —
+  `Handle` instead of the raw client (see "Adding a domain repository"
+  below). **Never embed a `Source` or `Handle` in a repository struct** —
   always a named field. Embedding promotes `Run` onto the repository type
   itself, leaking infra access past the domain interface; `examples/`
   previously had exactly this bug.
@@ -82,6 +83,7 @@ The workflow is:
    # user_repo.gen.yaml
    interface: UserRepository
    source: user_repo.go
+   test: true
    backends:
      - name: sqlite
        adapter: github.com/loykin/dbstore/adapters/sqlx
@@ -95,32 +97,43 @@ The workflow is:
 
    `adapter` may be a full import path or one of `dbstore-gen`'s built-in
    short names (`sqlite`, `mysql`, `postgres`, `rest`, `opensearch`,
-   `elasticsearch`). This generates `x_gen.go` (`XTemplate[A]` + the generic
+   `elasticsearch`). This generates `x_gen.go` (`XRepoBackend[A]` + the generic
    wrapper — DO NOT EDIT, regenerated every run) and, the first time only, a
-   `Template` stub per backend with `panic("TODO: implement")` bodies and
-   correct signatures. (`-interface`/`-source`/`-backend` flags still work
+   `XxxBackend` stub per backend with an application-facing constructor,
+   `panic("TODO: implement")` bodies, and correct signatures. Embedded
+   interfaces, named results, and a variadic final parameter are supported;
+   methods must take `context.Context` first and return `error` or
+   `(value, error)`.
+   (`-interface`/`-source`/`-backend` flags still work
    for quick one-off use outside a checked-in config, but `-interface` is
    always required then — dbstore-gen never guesses it.)
-2. Fill in each backend's `Template` method bodies using that backend's
-   `Adaptor` type (`sqlxadapter.Adaptor`, `restadapter.Adaptor`, ...) —
-   never the raw client. `Adaptor.Get` already translates a driver
+2. Fill in each backend's `XxxBackend` method bodies using that backend's
+   `Handle` type (`sqlxadapter.Handle`, `restadapter.Handle`, ...) —
+   never the raw client. `Handle.Get` already translates a driver
    "not found" (`sql.ErrNoRows`, HTTP 404, ...) into `dbstore.ErrNotFound`;
    `dbstore.Call` translates that into `(nil, nil)` for the caller, so
-   Template code should not do its own not-found translation beyond
-   returning what `Adaptor.Get` gives it.
-3. Document a multi-op method's atomicity by which `Adaptor` method it uses
+   repository backend code should not do its own not-found translation beyond
+   returning what `Handle.Get` gives it.
+3. Document a multi-op method's atomicity by which `Handle` method it uses
    — `WithTx` (SQL, atomic) vs. a plain loop (no transaction concept,
    best-effort sequential). Reflect this in the corresponding
-   `dbstoretest.Fixture.Caps.AtomicBatch` so the compliance suite only
-   asserts rollback against fixtures that can actually guarantee it.
-4. Add one `dbstoretest.Fixture` entry per backend and write the shared
-   assertions once, using only the domain interface's methods — see
-   `examples/repo_compliance/main_test.go`.
+   application-owned capability type and set it on the corresponding
+   `dbstoretest.Fixture`; this lets the compliance suite assert rollback
+   only against fixtures that can actually guarantee it.
+4. With `test: true`, generation creates an application-owned compliance-suite
+   skeleton and one application-owned `dbstoretest.Fixture` stub per backend.
+   Fill those files using only the domain interface's methods and set the
+   application-owned capabilities. Do not hand-edit
+   `x_compliance_gen_test.go`: it is regenerated from the configured backend
+   list so a newly configured backend cannot be omitted from the suite. See
+   `examples/repo_compliance/user_repo_compliance_test.go` and the adjacent
+   `user_repo_{sqlite,rest}_test.go` fixture files.
 5. `go generate ./... && go build ./... && go test ./...` before finishing.
    When the domain interface gains a method, generation stops before writing
-   anything and names the incomplete Templates. Add the missing method to
-   each existing implementation, then regenerate; do not delete the files.
-   The generated `var _ XTemplate[...] = ...Template{}` assertions remain a
+   anything and prints copy-ready stubs for the incomplete Backends. Add the
+   missing method to each existing implementation, then regenerate; do not
+   delete the files.
+   The generated `var _ XRepoBackend[...] = ...Backend{}` assertions remain a
    second compile-time guard for signature mismatches.
 
 ### Directory's two-lock design
