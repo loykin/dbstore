@@ -63,3 +63,27 @@ func (r *userRepo[A]) FindByID(ctx context.Context, id int) (*User, error) {
 // UserRepoBackend (e.g. UserRepository gained a method), this
 // line fails to compile instead of the gap going unnoticed.
 var _ UserRepoBackend[sqlxadapter.Handle] = SqliteUserBackend{}
+
+// ConnectSqliteUserRepository opens "sqlite" as the sole consumer of that
+// source, wires it into a SqliteUserBackend-backed UserRepository,
+// and returns the resulting Close. register installs whatever this backend's
+// Open needs (e.g. RegisterDefaultDrivers, or RegisterDriver with an
+// app-specific implementation) — pass nil if sqlxadapter.New already
+// registers what Open needs.
+//
+// Use this only when UserRepository is the sole consumer of "sqlite".
+// If a second repository needs the same source, open it explicitly with
+// sqlxadapter.New and construct both repositories over the same
+// sqlxadapter.Source instead — sharing one Source keeps them on the same
+// connection pool and per-source throttle instead of doubling both.
+func ConnectSqliteUserRepository(register func(*sqlxadapter.Adapter), cfg dbstore.SourceConfig) (UserRepository, func(), error) {
+	adapter := sqlxadapter.New()
+	if register != nil {
+		register(adapter)
+	}
+	if err := adapter.Open("sqlite", cfg); err != nil {
+		adapter.Close()
+		return nil, nil, err
+	}
+	return NewSqliteUserRepository(adapter.Source("sqlite")), adapter.Close, nil
+}

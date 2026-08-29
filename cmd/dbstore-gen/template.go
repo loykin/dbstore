@@ -49,6 +49,30 @@ func (r *{{$wrapper}}[A]) {{.Name}}({{.DomainParams}}) {{.ReturnSig}} {
 // {{$.Base}}RepoBackend (e.g. {{$.InterfaceName}} gained a method), this
 // line fails to compile instead of the gap going unnoticed.
 var _ {{$.Base}}RepoBackend[{{.PkgName}}.Handle] = {{.BackendStructName}}{}
+
+// {{.ConnectFactoryName}} opens "{{.Name}}" as the sole consumer of that
+// source, wires it into a {{.BackendStructName}}-backed {{$.InterfaceName}},
+// and returns the resulting Close. register installs whatever this backend's
+// Open needs (e.g. RegisterDefaultDrivers, or RegisterDriver with an
+// app-specific implementation) — pass nil if {{.PkgName}}.New already
+// registers what Open needs.
+//
+// Use this only when {{$.InterfaceName}} is the sole consumer of "{{.Name}}".
+// If a second repository needs the same source, open it explicitly with
+// {{.PkgName}}.New and construct both repositories over the same
+// {{.PkgName}}.Source instead — sharing one Source keeps them on the same
+// connection pool and per-source throttle instead of doubling both.
+func {{.ConnectFactoryName}}(register func(*{{.PkgName}}.Adapter), cfg dbstore.SourceConfig) ({{$.InterfaceName}}, func(), error) {
+	adapter := {{.PkgName}}.New()
+	if register != nil {
+		register(adapter)
+	}
+	if err := adapter.Open("{{.Name}}", cfg); err != nil {
+		adapter.Close()
+		return nil, nil, err
+	}
+	return {{.FactoryName}}(adapter.Source("{{.Name}}")), adapter.Close, nil
+}
 {{end}}
 `
 

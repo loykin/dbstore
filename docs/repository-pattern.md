@@ -143,6 +143,22 @@ preferred repository entry points. Direct `Executor.Run` access is appropriate
 for infrastructure setup such as schema creation, but normal repository
 operations should go through a Source and Handle.
 
+When this repository is the only consumer of `"primary"`, the generated
+`ConnectSqliteUserRepository` collapses the block above into one call:
+
+```go
+repo, closeFn, err := ConnectSqliteUserRepository(
+	func(a *sqlxadapter.Adapter) { a.RegisterDefaultDrivers() },
+	dbstore.SourceConfig{Driver: sqlxadapter.DriverSQLite, DSN: ":memory:"},
+)
+```
+
+It opens its own adapter and connection pool, so it only makes sense while
+nothing else shares that source name. As soon as a second repository needs
+`"primary"` too, go back to the explicit `Open` + `Source` form so both
+repositories share one pool and one throttle instead of each getting their
+own.
+
 ## 5. Verify every backend with one suite
 
 Write assertions only against the domain interface. Construct a fresh

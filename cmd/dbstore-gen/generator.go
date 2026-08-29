@@ -89,12 +89,13 @@ type methodView struct {
 }
 
 type backendView struct {
-	Name              string
-	PkgName           string
-	ImportPath        string
-	BackendStructName string
-	FactoryName       string
-	FixtureVarName    string
+	Name               string
+	PkgName            string
+	ImportPath         string
+	BackendStructName  string
+	FactoryName        string
+	ConnectFactoryName string
+	FixtureVarName     string
 }
 
 type importView struct {
@@ -180,12 +181,13 @@ func buildView(iface *Interface, backends []Backend) genView {
 			imports[b.ImportPath] = alias
 		}
 		v.Backends = append(v.Backends, backendView{
-			Name:              b.Name,
-			PkgName:           alias,
-			ImportPath:        b.ImportPath,
-			BackendStructName: upperFirst(b.Name) + base + "Backend",
-			FactoryName:       "New" + upperFirst(b.Name) + iface.Name,
-			FixtureVarName:    lowerFirst(upperFirst(b.Name) + base + "Fixture"),
+			Name:               b.Name,
+			PkgName:            alias,
+			ImportPath:         b.ImportPath,
+			BackendStructName:  upperFirst(b.Name) + base + "Backend",
+			FactoryName:        "New" + upperFirst(b.Name) + iface.Name,
+			ConnectFactoryName: "Connect" + upperFirst(b.Name) + iface.Name,
+			FixtureVarName:     lowerFirst(upperFirst(b.Name) + base + "Fixture"),
 		})
 	}
 

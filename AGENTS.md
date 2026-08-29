@@ -110,9 +110,15 @@ The workflow is:
    `adapter` may be a full import path or one of `dbstore-gen`'s built-in
    short names (`sqlite`, `mysql`, `postgres`, `rest`, `opensearch`,
    `elasticsearch`). This generates `x_gen.go` (`XRepoBackend[A]` + the generic
-   wrapper — DO NOT EDIT, regenerated every run) and, the first time only, a
-   `XxxBackend` stub per backend with an application-facing constructor,
-   `panic("TODO: implement")` bodies, and correct signatures. Embedded
+   wrapper + one `Connect{Backend}{Interface}` per backend — DO NOT EDIT,
+   regenerated every run) and, the first time only, a `XxxBackend` stub per
+   backend with an application-facing constructor, `panic("TODO: implement")`
+   bodies, and correct signatures. `Connect{Backend}{Interface}` opens the
+   named source, wires it into that backend's constructor, and returns a
+   Close — a shortcut for when nothing else shares that source; two
+   repositories on the same source should still share one `Open`/`Source`
+   pair instead of each calling their own `Connect`, or they end up on two
+   separate connection pools and throttles instead of one. Embedded
    interfaces, named results, and a variadic final parameter are supported;
    methods must take `context.Context` first and return `error` or
    `(value, error)`.

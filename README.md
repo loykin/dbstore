@@ -152,6 +152,27 @@ backend constructor, and the named source. See
 [`docs/repository-pattern.md`](docs/repository-pattern.md) for transactions,
 not-found behavior, and the shared compliance-suite pattern.
 
+If this repository is the only thing using `"primary"`, the generated
+`Connect{Backend}{Interface}` function collapses the block above into one
+call:
+
+```go
+users, closeFn, err := ConnectSqliteUserRepository(
+	func(a *sqlxadapter.Adapter) { a.RegisterDefaultDrivers() },
+	cfg,
+)
+if err != nil {
+	return err
+}
+defer closeFn()
+```
+
+Reach for this only when nothing else shares `"primary"`. It opens its own
+adapter and its own connection pool, so a second repository calling this
+again for the same name doubles the pool instead of sharing it — the moment
+a second repository needs the same source, switch both back to the explicit
+`Open` + `Source` form above so they share one pool and one throttle.
+
 ## Why
 
 The failure modes on the first page are the "solves it once" half of
