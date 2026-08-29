@@ -32,16 +32,16 @@ func TestCall_Success(t *testing.T) {
 	}
 }
 
-func TestCall_NotFoundTranslatesToZeroNil(t *testing.T) {
+func TestCall_NotFoundReturnsZeroAndError(t *testing.T) {
 	src := &fakeRunner[int]{client: 7}
 	got, err := Call(context.Background(), src, func(_ context.Context, _ int) (*string, error) {
 		return nil, fmt.Errorf("wrapped: %w", ErrNotFound)
 	})
-	if err != nil {
-		t.Fatalf("want nil error for not-found, got %v", err)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 	if got != nil {
-		t.Fatalf("want zero value for not-found, got %v", got)
+		t.Fatalf("want returned nil value, got %v", got)
 	}
 }
 

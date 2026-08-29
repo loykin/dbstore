@@ -54,6 +54,44 @@ func TestSource_RunTx(t *testing.T) {
 	}
 }
 
+func TestSource_RunTxDoesNotRebindAfterReplacement(t *testing.T) {
+	adapter := New()
+	adapter.RegisterDefaultDrivers()
+	defer adapter.Close()
+
+	cfg := dbstore.SourceConfig{
+		Driver: DriverSQLite,
+		DSN:    ":memory:",
+		PoolConfig: dbstore.PoolConfig{
+			MaxOpenConns:   1,
+			MaxIdleConns:   1,
+			MaxConcurrency: 1,
+		},
+	}
+	if err := adapter.Open("primary", cfg); err != nil {
+		t.Fatal(err)
+	}
+	source := adapter.Source("primary")
+	if err := adapter.Remove("primary"); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.Open("primary", cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	called := false
+	err := source.RunTx(context.Background(), func(context.Context, *sqlx.Tx) error {
+		called = true
+		return nil
+	})
+	if err == nil {
+		t.Fatal("old Source.RunTx unexpectedly rebound to the replacement")
+	}
+	if called {
+		t.Fatal("old Source.RunTx callback ran against the replacement")
+	}
+}
+
 // TestAdapter_Remove covers the dynamic-source teardown path the README's
 // "Dynamic Sources" section describes: open a per-tenant source, use it,
 // remove just that one, and confirm neither a second Open under the same

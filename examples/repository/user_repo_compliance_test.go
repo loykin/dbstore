@@ -6,7 +6,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	"github.com/loykin/dbstore"
 )
 
 // userRepoCapabilities declares optional guarantees specific to
@@ -50,8 +53,8 @@ func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRep
 
 	t.Run("FindByID_not_found", func(t *testing.T) {
 		user, err := newRepo(t).FindByID(ctx, 999)
-		if err != nil {
-			t.Fatal(err)
+		if !errors.Is(err, dbstore.ErrNotFound) {
+			t.Fatalf("FindByID error = %v, want dbstore.ErrNotFound", err)
 		}
 		if user != nil {
 			t.Fatalf("FindByID = %+v, want nil", user)

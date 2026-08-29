@@ -25,9 +25,8 @@ func main() {
 	registry := prometheus.NewRegistry()
 	observer := prometheusadapter.New("example_sql", registry)
 
-	sql := sqlxadapter.New()
+	sql := sqlxadapter.New(sqlxadapter.WithObserver(observer))
 	sql.RegisterDefaultDrivers()
-	sql.SetObserver(observer) // one call — every Run below is now instrumented
 	defer sql.Close()
 
 	poolCfg := dbstore.PoolConfig{MaxOpenConns: 1, MaxIdleConns: 1, MaxConcurrency: 1}

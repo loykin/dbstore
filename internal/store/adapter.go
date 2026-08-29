@@ -16,7 +16,6 @@ type AdapterContract[T any] interface {
 	Remove(name string) error
 	Sources() []SourceInfo
 	Executor() *Executor[T]
-	SetObserver(o Observer)
 	Close()
 }
 
@@ -27,14 +26,43 @@ type Adapter[T any] struct {
 
 var _ AdapterContract[any] = (*Adapter[any])(nil)
 
-func NewAdapter[T any]() *Adapter[T] {
-	registry := NewDriverRegistry[T]()
-	return &Adapter[T]{
-		registry:  registry,
-		directory: NewDirectory(registry),
+type adapterOptions struct {
+	observer    Observer
+	observerSet bool
+}
+
+// AdapterOption configures construction-time decisions. Options are applied
+// once by NewAdapter and are never consulted on the operation path.
+type AdapterOption func(*adapterOptions)
+
+// WithObserver fixes observer as the Adapter's Observer at construction.
+func WithObserver(observer Observer) AdapterOption {
+	return func(options *adapterOptions) {
+		if options.observerSet {
+			panic("dbstore: Observer configured more than once")
+		}
+		options.observer = observer
+		options.observerSet = true
 	}
 }
 
+func NewAdapter[T any](options ...AdapterOption) *Adapter[T] {
+	var configured adapterOptions
+	for _, option := range options {
+		if option != nil {
+			option(&configured)
+		}
+	}
+	registry := NewDriverRegistry[T]()
+	return &Adapter[T]{
+		registry:  registry,
+		directory: NewDirectory(registry, configured.observer),
+	}
+}
+
+// RegisterDriver adds a uniquely named driver during setup. The first valid
+// source registration freezes the registry so runtime source operations cannot
+// race configuration changes.
 func (a *Adapter[T]) RegisterDriver(name string, driver DriverBuilder[T]) {
 	a.registry.Register(name, driver)
 }
@@ -65,15 +93,20 @@ func (a *Adapter[T]) Configure(cfg Config) error {
 		return fmt.Errorf("configure source: name is required")
 	}
 
-	opened := make([]string, 0, len(cfg.Sources))
+	type openedSource struct {
+		name  string
+		entry *directoryEntry[T]
+	}
+	opened := make([]openedSource, 0, len(cfg.Sources))
 	for name, source := range cfg.Sources {
-		if err := a.Open(name, source); err != nil {
-			for _, openedName := range opened {
-				_ = a.directory.Remove(openedName)
+		entry, err := a.directory.register(name, source)
+		if err != nil {
+			for _, openedSource := range opened {
+				_ = a.directory.removeEntry(openedSource.name, openedSource.entry)
 			}
 			return fmt.Errorf("configure source %q: %w", name, err)
 		}
-		opened = append(opened, name)
+		opened = append(opened, openedSource{name: name, entry: entry})
 	}
 	return nil
 }
@@ -96,14 +129,8 @@ func (a *Adapter[T]) Executor() *Executor[T] {
 	return NewExecutor(a.directory)
 }
 
-// SetObserver registers an Observer that every Executor this Adapter has
-// already returned, or will return, notifies on each Run call — Executors
-// read the Directory's Observer at call time, not at construction, so this
-// takes effect immediately, including for Executors obtained earlier.
-func (a *Adapter[T]) SetObserver(o Observer) {
-	a.directory.SetObserver(o)
-}
-
+// Close permanently shuts down the Adapter. It waits for in-flight Runs and
+// Opens to finish cleaning up; subsequent Open calls fail.
 func (a *Adapter[T]) Close() {
 	a.directory.RemoveAll()
 }

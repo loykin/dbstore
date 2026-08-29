@@ -31,7 +31,7 @@ func newTestRegistry() *DriverRegistry[*sqlx.DB] {
 }
 
 func newTestDirectory() *Directory[*sqlx.DB] {
-	return NewDirectory(newTestRegistry())
+	return NewDirectory(newTestRegistry(), nil)
 }
 
 func testConfig(dsn string) SourceConfig {

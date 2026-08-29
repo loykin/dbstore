@@ -33,8 +33,8 @@ func (a Handle) Index(ctx context.Context, index, id string, doc any) error {
 }
 
 // Get fetches the document at index/id and decodes it into dest. A missing
-// document is translated into dbstore.ErrNotFound, which dbstore.Call turns
-// into a (zero, nil) result for the caller.
+// document is translated into dbstore.ErrNotFound, which generated
+// repositories preserve for the caller.
 func (a Handle) Get(ctx context.Context, index, id string, dest any) error {
 	resp, err := a.client.Document.Get(ctx, opensearchapi.DocumentGetReq{
 		Index:      index,

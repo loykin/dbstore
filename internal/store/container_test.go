@@ -167,7 +167,7 @@ func TestContainer_Postgres(t *testing.T) {
 	registry := NewDriverRegistry[*sqlx.DB]()
 	registry.Register("postgres", &postgresDriver{})
 
-	pool := NewDirectory(registry)
+	pool := NewDirectory(registry, nil)
 	t.Cleanup(pool.RemoveAll)
 
 	require.NoError(t, pool.Register("primary", SourceConfig{
@@ -207,7 +207,7 @@ func TestContainer_MySQL(t *testing.T) {
 	registry := NewDriverRegistry[*sqlx.DB]()
 	registry.Register("mysql", &mysqlDriver{})
 
-	pool := NewDirectory(registry)
+	pool := NewDirectory(registry, nil)
 	t.Cleanup(pool.RemoveAll)
 
 	require.NoError(t, pool.Register("primary", SourceConfig{
@@ -267,7 +267,7 @@ func TestContainer_MultiDB_PostgresAndMySQL(t *testing.T) {
 	registry.Register("postgres", &postgresDriver{})
 	registry.Register("mysql", &mysqlDriver{})
 
-	pool := NewDirectory(registry)
+	pool := NewDirectory(registry, nil)
 	t.Cleanup(pool.RemoveAll)
 
 	require.NoError(t, pool.Register("pg", SourceConfig{Driver: "postgres", DSN: pgDSN, PoolConfig: DefaultPoolConfig}))

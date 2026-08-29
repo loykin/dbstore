@@ -15,10 +15,8 @@ type Runner[T any] interface {
 
 // ErrNotFound is the sentinel a Backend implementation returns to signal
 // "no such record" for any backend (a SQL sql.ErrNoRows, an HTTP 404, a
-// search-engine miss, ...). Call translates it into a (zero, nil) result,
-// so every domain repository method gets the same not-found contract
-// regardless of backend, instead of each Backend author having to
-// remember to do the translation themselves.
+// search-engine miss, ...). Call returns it with the result type's zero value,
+// giving every generated repository one consistent not-found rule.
 var ErrNotFound = errors.New("dbstore: not found")
 
 // Exec runs fn against src's client for the error-only method shape.
@@ -26,11 +24,10 @@ func Exec[T any](ctx context.Context, src Runner[T], fn func(context.Context, T)
 	return src.Run(ctx, fn)
 }
 
-// Call runs fn against src's client for the (value, error) method shape.
-// If fn (or anything it calls) returns an error wrapping ErrNotFound, Call
-// translates it into a (zero value, nil) result — the not-found contract
-// every domain repository method shares, enforced in one place instead of
-// by convention in every Backend implementation.
+// Call runs fn against src's client for the (value, error) method shape
+// without hiding errors. ErrNotFound is returned with R's zero value so a
+// Backend cannot accidentally leak a partially-filled result on a miss. Other
+// errors preserve the Backend's result.
 func Call[T, R any](ctx context.Context, src Runner[T], fn func(context.Context, T) (R, error)) (R, error) {
 	var result R
 	err := src.Run(ctx, func(ctx context.Context, c T) error {
@@ -40,7 +37,7 @@ func Call[T, R any](ctx context.Context, src Runner[T], fn func(context.Context,
 	})
 	if errors.Is(err, ErrNotFound) {
 		var zero R
-		return zero, nil
+		return zero, err
 	}
 	return result, err
 }

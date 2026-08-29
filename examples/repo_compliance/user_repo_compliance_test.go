@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	"github.com/loykin/dbstore"
 )
 
 // userRepoCapabilities belongs to the application repository contract, not
@@ -65,8 +68,8 @@ func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRep
 	t.Run("FindByID_NotFound", func(t *testing.T) {
 		repo := newRepo(t)
 		u, err := repo.FindByID(ctx, 999)
-		if err != nil {
-			t.Fatalf("want (nil, nil) for missing id, got err = %v", err)
+		if !errors.Is(err, dbstore.ErrNotFound) {
+			t.Fatalf("FindByID error = %v, want dbstore.ErrNotFound", err)
 		}
 		if u != nil {
 			t.Fatalf("want nil user for missing id, got %+v", u)

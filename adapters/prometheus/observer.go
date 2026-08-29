@@ -1,8 +1,8 @@
 // Package prometheusadapter is a dbstore.Observer backed by Prometheus
 // metrics. It has no knowledge of any backend client type — the same
-// Observer can be attached to a sqlxadapter.Adapter, a restadapter.Adapter,
-// or any other dbstore.Adapter[T] with SetObserver, since Observer only ever
-// sees a source name, durations, and an error.
+// Observer can be attached when constructing a sqlxadapter.Adapter,
+// restadapter.Adapter, or any other dbstore.Adapter[T], since Observer only
+// ever sees a source name, durations, and an error.
 package prometheusadapter
 
 import (
@@ -122,17 +122,6 @@ func status(err error) string {
 	default:
 		return "error"
 	}
-}
-
-// ObserveSourceSnapshot implements dbstore.Observer. It Sets sources_active
-// to len(sources) directly, rather than incrementing once per element, so
-// calling it more than once — SetObserver called again, or with a different
-// Observer — always converges to the correct count instead of drifting
-// upward. source_events_total is intentionally untouched here: a snapshot
-// is a state sync, not a registration event, and must never inflate that
-// counter no matter how many times SetObserver runs.
-func (o *Observer) ObserveSourceSnapshot(sources []string) {
-	o.sourcesTotal.Set(float64(len(sources)))
 }
 
 // ObserveSourceRegistered implements dbstore.Observer.

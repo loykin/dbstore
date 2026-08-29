@@ -14,7 +14,7 @@ then keeps each backend's protocol logic explicit.
 |---|---|
 | Repository interface | Application-owned domain contract, such as `UserRepository` |
 | Adapter | Opens named sources and owns their lifecycle |
-| Source | A `Runner` scoped to one registered source name |
+| Source | A `Runner` bound to the exact registered source entry present at construction |
 | Handle | Backend-specific operations exposed to repository code; never the raw client |
 | RepoBackend | One backend's implementation of the repository operations |
 | Generated repository | Delegates the domain interface through a `Runner` to a `RepoBackend` |
@@ -114,10 +114,13 @@ Repository backend code uses only the adapter's `Handle`. It does not receive
 `*sqlx.DB`, `*http.Client`, or a search SDK client. Handles own protocol-level
 normalization such as query rebinding and not-found translation.
 
-`Handle.Get` returns `dbstore.ErrNotFound` for a missing record.
-`dbstore.Call` converts that sentinel to the repository contract's zero value
-and a nil error. Backend implementations should return the Handle error rather
-than translating not-found again.
+`Handle.Get` returns `dbstore.ErrNotFound` for a missing record. Generated
+repositories always return it with the result type's zero value through
+`dbstore.Call`. Method
+names and method-level policies are deliberately absent from the YAML, keeping
+the Go interface as the single source of repository shape. Backend
+implementations should return the Handle error rather than translating
+not-found again.
 
 ## 4. Construct the repository
 
@@ -158,8 +161,8 @@ func runUserRepoComplianceSuite(
 	t.Run("FindByID_NotFound", func(t *testing.T) {
 		repo := newRepo(t)
 		user, err := repo.FindByID(context.Background(), 999)
-		if err != nil || user != nil {
-			t.Fatalf("got (%v, %v), want (nil, nil)", user, err)
+		if !errors.Is(err, dbstore.ErrNotFound) || user != nil {
+			t.Fatalf("got (%v, %v), want (nil, ErrNotFound)", user, err)
 		}
 	})
 }

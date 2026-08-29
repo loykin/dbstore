@@ -17,8 +17,8 @@ import (
 type Handle struct{ c *Client }
 
 // Get issues a GET request and decodes the JSON response into dest. A 404
-// is translated into dbstore.ErrNotFound, which dbstore.Call turns into a
-// (zero, nil) result for the caller.
+// is translated into dbstore.ErrNotFound, which generated repositories
+// preserve for the caller.
 func (a Handle) Get(ctx context.Context, path string, dest any) error {
 	err := a.c.DoJSON(ctx, http.MethodGet, path, nil, dest)
 	if isNotFound(err) {

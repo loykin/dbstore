@@ -16,8 +16,8 @@ import (
 type Handle struct{ db *sqlx.DB }
 
 // Get runs a single-row query and scans it into dest. A sql.ErrNoRows is
-// translated into dbstore.ErrNotFound, which dbstore.Call turns into a
-// (zero, nil) result for the caller.
+// translated into dbstore.ErrNotFound, which generated repositories preserve
+// for the caller.
 func (a Handle) Get(ctx context.Context, dest any, query string, args ...any) error {
 	err := a.db.GetContext(ctx, dest, a.db.Rebind(query), args...)
 	if errors.Is(err, sql.ErrNoRows) {

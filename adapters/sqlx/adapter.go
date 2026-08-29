@@ -9,10 +9,16 @@ type Adapter struct {
 	core *dbstore.Adapter[*sqlx.DB]
 }
 
+type Option = dbstore.AdapterOption
+
+func WithObserver(observer dbstore.Observer) Option {
+	return dbstore.WithObserver(observer)
+}
+
 var _ dbstore.AdapterContract[*sqlx.DB] = (*Adapter)(nil)
 
-func New() *Adapter {
-	return &Adapter{core: dbstore.NewAdapter[*sqlx.DB]()}
+func New(options ...Option) *Adapter {
+	return &Adapter{core: dbstore.NewAdapter[*sqlx.DB](options...)}
 }
 
 func (a *Adapter) RegisterDriver(name string, driver dbstore.DriverBuilder[*sqlx.DB]) {
@@ -54,10 +60,6 @@ func (a *Adapter) Executor() *dbstore.Executor[*sqlx.DB] {
 // own type, not the core adapter's raw client type.
 func (a *Adapter) Source(name string) Source {
 	return NewSource(name, a.core.Executor())
-}
-
-func (a *Adapter) SetObserver(o dbstore.Observer) {
-	a.core.SetObserver(o)
 }
 
 func (a *Adapter) Close() {

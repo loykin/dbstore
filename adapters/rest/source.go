@@ -6,8 +6,9 @@ import (
 	"github.com/loykin/dbstore"
 )
 
-// Source hands repository backend code a Handle instead of the raw *Client. Value
-// receiver (not pointer) so a Source value satisfies dbstore.Runner[Handle].
+// Source is a stable entry binding that hands repository backend code a Handle
+// instead of the raw *Client. Value receiver (not pointer) so a Source value
+// satisfies dbstore.Runner[Handle].
 type Source struct {
 	source dbstore.Source[*Client]
 }

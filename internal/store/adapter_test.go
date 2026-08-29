@@ -3,11 +3,30 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/require"
 )
+
+type configureSequenceDriver struct {
+	calls         atomic.Int32
+	secondStarted chan struct{}
+	releaseSecond chan struct{}
+}
+
+func (d *configureSequenceDriver) Open(SourceConfig) (*lifecycleTestClient, error) {
+	switch d.calls.Add(1) {
+	case 2:
+		close(d.secondStarted)
+		<-d.releaseSecond
+		return nil, errors.New("forced failure")
+	default:
+		return &lifecycleTestClient{}, nil
+	}
+}
 
 func TestAdapter_Configure(t *testing.T) {
 	var cfg Config
@@ -95,4 +114,46 @@ func TestAdapter_ConfigureRollsBackOnMidListFailure(t *testing.T) {
 		return nil
 	})
 	require.Error(t, err)
+}
+
+func TestAdapter_ConfigureRollbackDoesNotRemoveReplacement(t *testing.T) {
+	driver := &configureSequenceDriver{
+		secondStarted: make(chan struct{}),
+		releaseSecond: make(chan struct{}),
+	}
+	adapter := NewAdapter[*lifecycleTestClient]()
+	adapter.RegisterDriver("sequence", driver)
+	defer adapter.Close()
+	var releaseOnce atomic.Bool
+	releaseFailure := func() {
+		if releaseOnce.CompareAndSwap(false, true) {
+			close(driver.releaseSecond)
+		}
+	}
+	defer releaseFailure()
+
+	configureDone := make(chan error, 1)
+	go func() {
+		configureDone <- adapter.Configure(Config{Sources: map[string]SourceConfig{
+			"first-map-entry":  {Driver: "sequence"},
+			"second-map-entry": {Driver: "sequence"},
+		}})
+	}()
+	<-driver.secondStarted
+
+	// The map iteration order is intentionally irrelevant: whichever source
+	// was first is the sole published source while the second Open is blocked.
+	sources := adapter.Sources()
+	require.Len(t, sources, 1)
+	name := sources[0].Name
+	require.NoError(t, adapter.Remove(name))
+	require.NoError(t, adapter.Open(name, SourceConfig{Driver: "sequence"}))
+	replacement, err := adapter.directory.get(name)
+	require.NoError(t, err)
+
+	releaseFailure()
+	require.Error(t, <-configureDone)
+	current, err := adapter.directory.get(name)
+	require.NoError(t, err)
+	require.Same(t, replacement, current)
 }

@@ -29,9 +29,24 @@ func (e *Executor[T]) Run(ctx context.Context, name string, fn func(context.Cont
 	if acquireErr != nil {
 		return acquireErr
 	}
+	return e.runEntry(ctx, name, entry, fn)
+}
+
+// runSource is Source's identity-bound counterpart to Run's live name lookup.
+func (e *Executor[T]) runSource(ctx context.Context, name string, expected *directoryEntry[T], fn func(context.Context, T) error) (err error) {
+	entry, acquireErr := e.directory.acquireSource(name, expected)
+	if acquireErr != nil {
+		return acquireErr
+	}
+	return e.runEntry(ctx, name, entry, fn)
+}
+
+// runEntry owns the common execution path after an entry has joined the
+// in-flight set through either live Executor.Run or identity-bound Source.Run.
+func (e *Executor[T]) runEntry(ctx context.Context, name string, entry *directoryEntry[T], fn func(context.Context, T) error) (err error) {
 	defer e.directory.release(entry)
 
-	observer := e.directory.getObserver()
+	observer := e.directory.observer
 
 	waitStart := time.Now()
 	if throttleErr := entry.throttle.Acquire(ctx); throttleErr != nil {

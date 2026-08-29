@@ -48,6 +48,23 @@ backends:
 	}
 }
 
+func TestLoadConfig_RejectsUnknownFields(t *testing.T) {
+	path := writeConfig(t, `
+interface: UserRepository
+source: user_repo.go
+methods:
+  FindByID:
+    notFound: zero
+backends:
+  - name: sqlite
+    adapter: sqlite
+`)
+	_, err := loadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "field methods not found") {
+		t.Fatalf("err = %v, want unknown-field error", err)
+	}
+}
+
 func TestLoadConfig_MissingInterface(t *testing.T) {
 	path := writeConfig(t, `
 source: user_repo.go

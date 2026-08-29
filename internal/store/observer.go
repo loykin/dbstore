@@ -10,20 +10,23 @@ import "time"
 // ready-made implementation built on these hooks, not a special case of them.
 //
 // All methods are called synchronously, inline in the goroutine driving
-// Register/Remove/Run/SetObserver — the same constraint
+// Register/Remove/Run — the same constraint
 // net/http/httptrace.ClientTrace's hooks document. An implementation must
 // not block, do I/O, or acquire a lock another goroutine might hold while
 // calling back into dbstore, or it distorts the very durations/timings it's
 // there to measure (and, in the Run case, holds the throttle slot or
 // in-flight count open longer than the operation itself did).
 //
+// Synchronous does not mean serialized: different goroutines may invoke an
+// Observer concurrently, so every implementation must be safe for concurrent
+// use. Lifecycle callbacks are delivered in lifecycle mutation order, but Run
+// callbacks are intentionally not serialized with them.
+//
 // In particular, an implementation must not call back into
-// Register/Remove/RemoveAll/SetObserver on the same Directory from inside
-// any of these methods: that's a same-goroutine reentrancy, not ordinary
-// cross-goroutine contention, and dbstore panics before lifecycle state
-// changes when it detects one (see observerCallbackGuard) rather than let it
-// hang forever or leave a partial mutation behind. Do that work from a
-// separate goroutine instead.
+// Register/Remove/RemoveAll on the same Directory from inside any of these
+// methods. Lifecycle callbacks are ordered by a mutex, and a synchronous
+// lifecycle reentry would attempt to acquire that mutex recursively. Schedule
+// such work after the callback returns instead.
 //
 // Unlike httptrace, a panicking Observer method does not crash the call that
 // triggered it: dbstore recovers around every Observer invocation (see
@@ -32,22 +35,8 @@ import "time"
 // logging Observer must never be able to fail a repository call whose fn
 // itself succeeded.
 type Observer interface {
-	// ObserveSourceSnapshot is called once, synchronously, by SetObserver,
-	// with every source currently registered at the moment this Observer is
-	// attached. It exists to bring a newly (or re-)attached Observer's view
-	// up to date without pretending those sources were just registered —
-	// it is a state sync, not a lifecycle event. An implementation tracking
-	// a live count (e.g. a gauge) should set it from len(sources) directly
-	// rather than incrementing per element, and must not treat this as
-	// contributing to a registration-events counter: calling SetObserver
-	// twice, or with different Observer values over a process's lifetime,
-	// must not inflate that count. sources is nil, not called with an empty
-	// non-nil slice, when nothing is registered yet.
-	ObserveSourceSnapshot(sources []string)
 	// ObserveSourceRegistered is called when Directory.Register successfully
-	// opens and registers a new source — a genuine lifecycle event, exactly
-	// once per Register call that succeeds. Never called for sources an
-	// Observer already knows about via ObserveSourceSnapshot.
+	// opens and registers a new source, exactly once per successful Register.
 	ObserveSourceRegistered(source string)
 	// ObserveSourceRemoved is called when Directory.Remove or RemoveAll
 	// takes a source out of the registry — a genuine lifecycle event,
@@ -70,7 +59,7 @@ type Observer interface {
 
 // safeObserve calls fn — always a single Observer method invocation — and
 // recovers if it panics, per Observer's doc comment: an Observer bug must
-// never crash the Register/Remove/SetObserver/Run call that triggered it.
+// never crash the Register/Remove/Run call that triggered it.
 // The panic is discarded, not logged, because core has no logging facility
 // to discard it into safely either; an Observer that needs its own panics
 // visible should recover and report them itself.
@@ -81,17 +70,10 @@ func safeObserve(fn func()) {
 
 // MultiObserver fans a single Observer call out to every Observer in the
 // slice, in order — the Observer equivalent of io.MultiWriter, for
-// attaching more than one (e.g. Prometheus metrics and a custom audit log)
-// with SetObserver, which only holds one. Each member is called through
-// safeObserve individually, so one member panicking doesn't stop the rest
-// of the group from being notified.
+// attaching more than one (e.g. Prometheus metrics and a custom audit log).
+// Each member is called through safeObserve individually, so one member
+// panicking doesn't stop the rest of the group from being notified.
 type MultiObserver []Observer
-
-func (m MultiObserver) ObserveSourceSnapshot(sources []string) {
-	for _, o := range m {
-		safeObserve(func() { o.ObserveSourceSnapshot(sources) })
-	}
-}
 
 func (m MultiObserver) ObserveSourceRegistered(source string) {
 	for _, o := range m {

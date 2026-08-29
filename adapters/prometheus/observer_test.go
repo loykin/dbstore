@@ -215,46 +215,6 @@ func TestObserver_SourceLifecycleTracksActiveGaugeAndEvents(t *testing.T) {
 	require.Equal(t, float64(1), counterValue(t, reg, "test_source_events_total", "event", "removed"))
 }
 
-func TestObserver_SnapshotSetsGaugeAbsolutely(t *testing.T) {
-	reg := prometheus.NewRegistry()
-	obs := New("test", reg)
-
-	obs.ObserveSourceSnapshot([]string{"a", "b"})
-	require.Equal(t, float64(2), gaugeValue(t, reg, "test_sources_active", nil))
-
-	obs.ObserveSourceSnapshot([]string{"a", "b"}) // called again — must not double
-	require.Equal(t, float64(2), gaugeValue(t, reg, "test_sources_active", nil))
-
-	obs.ObserveSourceSnapshot([]string{"a"}) // fewer sources — must converge down too
-	require.Equal(t, float64(1), gaugeValue(t, reg, "test_sources_active", nil))
-}
-
-func TestObserver_SnapshotDoesNotTouchEventsCounter(t *testing.T) {
-	reg := prometheus.NewRegistry()
-	obs := New("test", reg)
-
-	obs.ObserveSourceSnapshot([]string{"a", "b"})
-
-	family := findMetricFamily(t, reg, "test_source_events_total")
-	require.Nil(t, family, "a snapshot must never create a source_events_total series")
-}
-
-// TestRegression_SetObserverCalledTwiceDoesNotLeaveGaugeStuck is the exact
-// scenario from review: Open("primary") -> SetObserver(obs) ->
-// SetObserver(obs) -> Remove("primary") must leave sources_active at 0, not
-// 1 — reproduced here at the Observer level (Directory-level coverage is in
-// internal/store/observer_test.go).
-func TestRegression_SetObserverCalledTwiceDoesNotLeaveGaugeStuck(t *testing.T) {
-	reg := prometheus.NewRegistry()
-	obs := New("test", reg)
-
-	obs.ObserveSourceSnapshot([]string{"primary"}) // SetObserver #1
-	obs.ObserveSourceSnapshot([]string{"primary"}) // SetObserver #2, same set
-	obs.ObserveSourceRemoved("primary")            // Remove("primary")
-
-	require.Equal(t, float64(0), gaugeValue(t, reg, "test_sources_active", nil))
-}
-
 func TestNew_SameNamespaceAndRegistryIsIdempotent(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	first := New("test", reg)

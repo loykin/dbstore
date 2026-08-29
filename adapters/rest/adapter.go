@@ -6,10 +6,12 @@ type Adapter struct {
 	core *dbstore.Adapter[*Client]
 }
 
+type Option = dbstore.AdapterOption
+
 var _ dbstore.AdapterContract[*Client] = (*Adapter)(nil)
 
-func New() *Adapter {
-	return &Adapter{core: dbstore.NewAdapter[*Client]()}
+func New(options ...Option) *Adapter {
+	return &Adapter{core: dbstore.NewAdapter[*Client](options...)}
 }
 
 func (a *Adapter) RegisterDriver(name string, driver dbstore.DriverBuilder[*Client]) {
@@ -40,10 +42,6 @@ func (a *Adapter) Executor() *dbstore.Executor[*Client] {
 // equivalent for why this isn't part of AdapterContract[T].
 func (a *Adapter) Source(name string) Source {
 	return NewSource(name, a.core.Executor())
-}
-
-func (a *Adapter) SetObserver(o dbstore.Observer) {
-	a.core.SetObserver(o)
 }
 
 func (a *Adapter) Close() {

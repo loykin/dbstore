@@ -18,6 +18,7 @@ type (
 	SourceConfig             = store.SourceConfig
 	SourceInfo               = store.SourceInfo
 	PoolConfig               = store.PoolConfig
+	AdapterOption            = store.AdapterOption
 	DriverBuilder[T any]     = store.DriverBuilder[T]
 	PoolConfigApplier[T any] = store.PoolConfigApplier[T]
 	DriverRegistry[T any]    = store.DriverRegistry[T]
@@ -26,7 +27,8 @@ type (
 	MultiObserver            = store.MultiObserver
 )
 
-func NewAdapter[T any]() *Adapter[T]                         { return store.NewAdapter[T]() }
+func NewAdapter[T any](options ...AdapterOption) *Adapter[T] { return store.NewAdapter[T](options...) }
+func WithObserver(observer Observer) AdapterOption           { return store.WithObserver(observer) }
 func NewSource[T any](name string, e *Executor[T]) Source[T] { return store.NewSource[T](name, e) }
 
 func Exec[T any](ctx context.Context, src Runner[T], fn func(context.Context, T) error) error {

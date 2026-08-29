@@ -1,10 +1,24 @@
 # dbstore
 
-dbstore is a small Go runtime for named backend clients: register a client
-under a name, get repositories scoped and throttled access to it by that
-name, and let dbstore own its lifecycle — the same way regardless of
-whether the client is a `*sql.DB`, an HTTP client, or an OpenSearch SDK
-client. See "Guarantees" below for exactly what that lifecycle handling
+Every project that runs more than one named backend client reinvents the same
+failure modes: opening the same name twice, running work against a name
+mid-removal, one slow source starving the rest, a shutdown that leaks a
+client — usually solved once per project, per backend type, and easy to get
+subtly wrong (a lock held across a slow connect call is a classic one).
+dbstore solves that once, generically over any client type (`*sql.DB`, an
+HTTP client, an OpenSearch SDK client, ...).
+
+When one repository contract needs more than one backend, dbstore also
+generates the delegation boilerplate so one behavioral test suite verifies
+every implementation instead of two independently-drifting ones. **In
+numbers:** a single-backend repository needs none of this generator
+machinery — 4 lines of setup, see "Single-Backend Quick Start" below. A
+4-method repository shared across SQLite and REST
+(`examples/repo_compliance`) is ~285 lines total, and about 155 of those are
+tests you'd want regardless of dbstore; the rest is a 10-line YAML config
+and two ~50-line backend bodies. The full breakdown is under "Why".
+
+See "Guarantees" below for exactly what dbstore's lifecycle handling
 promises.
 
 ## Start Here: What You Actually Build
@@ -78,6 +92,14 @@ backend to the YAML regenerates the registry and creates its missing fixture
 stub, which prevents a configured backend from being silently omitted from the
 shared suite.
 
+**What this actually costs**, measured on `examples/repo_compliance` (4
+methods, SQLite + REST): ~285 lines across every file in the table above
+marked "You" — and roughly 155 of those are the compliance suite and two
+fixtures, tests you'd write by hand anyway to trust two independent
+implementations behave the same. The generator's own tax is the 10-line YAML
+plus the two ~50-line backend bodies; the two "Generator"-owned rows
+(~87 lines) you never write or touch at all.
+
 ### 3. Fill only the backend behavior
 
 The generated backend file already contains the type, method signatures, and
@@ -127,18 +149,11 @@ not-found behavior, and the shared compliance-suite pattern.
 
 ## Why
 
-Most Go services eventually need more than one named connection to more
-than one backend — a primary and a replica database, a search cluster
-alongside SQL, a per-tenant database opened on demand. That usually turns
-into a hand-rolled `map[string]*sql.DB` behind a mutex, a bespoke "did we
-already open this one" check, an ad hoc concurrency limiter so one slow
-source can't starve the rest, and a shutdown loop that closes everything
-cleanly — rewritten per project and per backend type, and easy to get
-subtly wrong (a lock held across a slow connect call is a classic one).
-dbstore factors that out once, generically over any backend client type,
-and stops there: it does not try to unify SQL transactions, REST calls, and
-search queries behind one interface, since that kind of abstraction tends
-to leak the moment two backends diverge in how they actually work.
+The failure modes on the first page are the "solves it once" half of
+dbstore's value. It stops there deliberately: it does not try to unify SQL
+transactions, REST calls, and search queries behind one interface, since
+that kind of abstraction tends to leak the moment two backends diverge in
+how they actually work.
 
 **The most valuable thing this setup enables** is repository portability.
 Every backend implementation of a repository has the same shape: a
@@ -178,7 +193,7 @@ func runUserRepoComplianceSuite(t *testing.T, newRepo func(t *testing.T) UserRep
 	})
 	t.Run("FindByID_NotFound", func(t *testing.T) {
 		u, err := newRepo(t).FindByID(ctx, 999)
-		require.NoError(t, err) // not found is (nil, nil), not an error — see dbstore.ErrNotFound below
+		require.ErrorIs(t, err, dbstore.ErrNotFound)
 		assert.Nil(t, u)
 	})
 	// ...
@@ -211,6 +226,24 @@ REST-backed one hitting a fake JSON API — `sqlxadapter.Handle` vs
 fixture, since REST has no transaction concept; its `Fixture.Caps` simply
 leaves `AtomicBatch` false and the suite skips that one assertion for it —
 see "Code Generator And Capabilities" below.
+
+**In numbers**, `examples/repo_compliance` end to end — a 4-method
+`UserRepository` over SQLite and REST:
+
+| You write | Lines |
+|---|---|
+| Domain interface (`user_repo.go`) + generator YAML | 32 |
+| Two backend implementations (SQLite + REST, `Handle`-based) | 98 |
+| Compliance suite (`runUserRepoComplianceSuite`) + two fixtures | 155 |
+| **Total application-owned** | **285** |
+| Generated wrapper + fixture registry — never touched | 87 |
+
+155 of the 285 lines are the compliance suite and fixtures — tests you'd
+write by hand anyway the moment a second implementation has to prove it
+behaves like the first. What dbstore actually adds on top of that is the
+10-line YAML and the two backend bodies; the 87 generated lines replace
+work you would otherwise hand-write and keep in sync yourself every time
+the interface changes.
 
 What makes writing that suite worth it is the layer underneath: named
 registration, a per-source concurrency throttle so one slow backend can't
@@ -347,8 +380,8 @@ flowchart TD
     A["DriverBuilder[T]<br/>RegisterDriver — opens one T from a SourceConfig"]
     B["Adapter[T]<br/>Open — registers and connects a named source"]
     C["Directory[T]<br/>lifecycle + per-source concurrency throttle"]
-    D["Executor[T]<br/>scoped, throttled access to a named client"]
-    E["adapter Source<br/>named field on a repository, never embedded"]
+    D["Executor[T]<br/>low-level, throttled access to the current named client"]
+    E["adapter Source<br/>stable entry binding; named field on a repository, never embedded"]
     H["Handle<br/>backend-specific handle Source.Run hands to a callback — never the raw client"]
     F[Repository Implementation]
     G[Repository Interface]
@@ -376,6 +409,8 @@ is one line; expand for the precise semantics.
 - **Safe removal** — no new `Run` starts against a name after `Remove`
   returns; in-flight `Run`s finish first.
 - **No double-open** — concurrent opens of the same name: exactly one wins.
+- **Terminal close** — `Close` waits for in-flight Runs and Opens to finish
+  cleanup; a source cannot publish after it returns, and later Opens fail.
 - **`Configure` is not atomic** — sequential publish with best-effort
   rollback, not all-or-nothing.
 - **An Observer can't crash the operation it's observing** — a panic in an
@@ -396,24 +431,30 @@ is one line; expand for the precise semantics.
   concurrently, exactly one succeeds. The other gets an error, and its own
   client is closed rather than leaked if it managed to connect one before
   losing the race.
+- **Terminal close** — `Close` permanently closes the Adapter. It removes and
+  drains registered sources, waits for any driver `Open` already in progress
+  to finish and clean up its client, and rejects future `Open` calls. In
+  particular, an `Open` racing with `Close` cannot publish a source after
+  `Close` returns.
 - **`Configure` publishes sequentially and rolls back what it opened, but
   isn't atomic** — sources are opened one at a time; if any fails, every
   source *this call* already opened is closed again before the error
   returns. Sources opened earlier in the same call are genuinely visible in
   the window before that rollback — a concurrent `Run` could reach them. A
   rollback `Remove`'s own error (e.g. `Close` failing) is discarded; only
-  the triggering `Open` error is returned. A name colliding with a source
-  from an *earlier* `Configure` (or `Open`) call is left untouched.
+  the triggering `Open` error is returned. Rollback is entry-identity based:
+  if another goroutine removes one of these sources and registers a replacement
+  under the same name, that replacement is left untouched. A name colliding
+  with a source from an *earlier* `Configure` (or `Open`) call is also left
+  untouched.
 - **An Observer can't crash the operation it's observing** — a panicking
   `Observer` method is recovered and discarded (see "Metrics" below); it
   cannot fail a `Run` whose `fn` succeeded or make a successful `Register`
   look like it failed.
 - **An Observer must not call back into the same `Directory`** — calling
-  `Register`/`Remove`/`RemoveAll`/`SetObserver` on the source's own
-  `Directory` from inside an Observer method is a same-goroutine reentrancy,
-  not ordinary contention, and self-deadlocks the lock that orders callback
-  delivery. dbstore detects this and panics immediately instead of hanging
-  forever; do that work from a separate goroutine instead.
+  `Register`/`Remove`/`RemoveAll` on the source's own `Directory` from inside
+  an Observer method is forbidden synchronous reentrancy and can self-deadlock
+  the lifecycle callback order. Schedule that work after the callback returns.
 
 </details>
 
@@ -643,6 +684,14 @@ sql := sqlxadapter.New()
 sql.RegisterDefaultDrivers()
 ```
 
+Register drivers once, before the first valid source-registration attempt.
+That first attempt freezes the registry before opening the client; later
+registration panics as setup misuse instead of changing live runtime behavior.
+The registry remains frozen even when that first client Open fails; retry the
+source with corrected connection configuration, not a newly injected driver.
+Registering the same driver name twice is also rejected rather than silently
+replacing the first definition.
+
 The application still imports the concrete `database/sql` driver package, such
 as `_ "modernc.org/sqlite"` or `_ "github.com/lib/pq"`. Implement a custom
 driver only when opening the client needs custom parsing, authentication, or
@@ -845,6 +894,11 @@ interface plus the generic `userRepo[A]` wrapper that delegates every
 first time only, one Backend stub per backend with method signatures already
 filled in and `panic("TODO: implement")` bodies for you to replace.
 
+`Call` returns `(zero value, dbstore.ErrNotFound)` for a miss. This is the one
+generated repository rule for every value-returning method: method names and
+per-method behavior are not duplicated in YAML. Applications that want to
+hide the sentinel translate it at their service/API boundary.
+
 With `test: true`, it also creates an application-owned compliance-suite
 skeleton and one application-owned fixture stub per backend, while regenerating
 `user_repo_compliance_gen_test.go` on every run. That generated registry is the
@@ -986,7 +1040,6 @@ Throttle" above), instead of just guessing.
 
 ```go
 type Observer interface {
-	ObserveSourceSnapshot(sources []string)
 	ObserveSourceRegistered(source string)
 	ObserveSourceRemoved(source string)
 	ObserveAcquire(source string, waited time.Duration, err error)
@@ -996,22 +1049,13 @@ type Observer interface {
 
 `ObserveAcquire`/`ObserveComplete` bracket `fn`'s execution (acquire
 succeeds → run → complete), which is what lets an Observer track in-flight
-operations, not just their duration afterward. All five methods are called
+operations, not just their duration afterward. All four methods are called
 synchronously — the same constraint `net/http/httptrace.ClientTrace`'s hooks
 document — so an implementation must not block or do I/O.
 
-`SetObserver` immediately calls `ObserveSourceSnapshot` with every source
-already open, so attaching an Observer after `Open` doesn't leave it
-thinking those sources don't exist — which would otherwise show up later as
-`ObserveSourceRemoved` with no matching registration (a Prometheus
-`sources_active` gauge going negative, for instance). The snapshot is a
-single call, not a replayed `ObserveSourceRegistered` per source, and calling
-`SetObserver` more than once — the same Observer, or a different one — always
-snapshots the current set again rather than re-firing registration events:
-an Observer maintaining a live count should `Set` it from `len(sources)`,
-not increment per element, or repeated `SetObserver` calls inflate it (a
-gauge stuck above the real count, a "registrations" counter that no longer
-means "registrations"). `adapters/prometheus` does exactly this.
+The Observer is fixed at construction, before any source can open. There is no
+runtime replacement or state-resynchronization API, so every successful
+registration has exactly one matching lifecycle event.
 
 Core has no metrics dependency — `Observer` is vendor-neutral for the same
 reason `PoolConfigApplier`/`Closer` are. `adapters/prometheus` is a
@@ -1021,8 +1065,9 @@ every source registration and `Run` after that is automatically recorded:
 ```go
 import prometheusadapter "github.com/loykin/dbstore/adapters/prometheus"
 
-sql := sqlxadapter.New()
-sql.SetObserver(prometheusadapter.New("myapp_sql", nil)) // nil -> prometheus.DefaultRegisterer
+sql := sqlxadapter.New(sqlxadapter.WithObserver(
+	prometheusadapter.New("myapp_sql", nil), // nil -> prometheus.DefaultRegisterer
+))
 ```
 
 It exposes five metrics per namespace: `throttle_wait_seconds{source,status}`
@@ -1053,13 +1098,15 @@ backends where sub-millisecond calls are routine.
 The same `Observer` can be shared across multiple adapters (`sqlxadapter`,
 `restadapter`, ...) — it never sees the backend client type, only a source
 name, durations, and an error. Apps that prefer OpenTelemetry, StatsD, or
-plain logging implement `Observer` themselves instead; nothing about
-`SetObserver` is Prometheus-specific. Combine more than one (e.g. Prometheus
-metrics and a custom audit log) with `dbstore.MultiObserver{a, b}`, which
-fans every call out to each — `SetObserver` itself only holds one. Not
-calling `SetObserver` at all costs nothing — no metrics dependency is even
-loaded unless `adapters/prometheus` is imported. See `examples/prometheus`
-for a full run scraping `/metrics`.
+plain logging implement `Observer` themselves instead. Combine more than one
+(e.g. Prometheus metrics and a custom audit log) at construction with
+`sqlxadapter.WithObserver(dbstore.MultiObserver{a, b})`. Omitting the option
+costs nothing — no metrics dependency is loaded unless `adapters/prometheus`
+is imported. See `examples/prometheus` for a full run scraping `/metrics`.
+
+Observer callbacks are synchronous but not globally serialized: different
+goroutines may call the same Observer concurrently, and Run callbacks may
+overlap lifecycle callbacks. Implementations must be concurrency-safe.
 
 ## Dynamic Sources
 
@@ -1078,6 +1125,22 @@ err := sql.Remove("tenant-" + id)
 its client, without touching any other source. A new `Run` against a removed
 name fails immediately; the same name can be `Open`ed again afterward.
 
+A `Source` binds to the exact registered entry that exists when the Source is
+constructed. Removing that entry invalidates retained repositories; reopening
+the same string name does not silently retarget them. Construct a fresh Source
+and repository after a successful reopen:
+
+```go
+sql.Open("tenant-"+id, replacementCfg)
+repo = NewUserRepo(sql.Source("tenant-" + id))
+```
+
+Construct Sources only after `Open` succeeds. A Source constructed before its
+name is registered stays invalid rather than binding later. `Executor.Run`
+remains the explicit low-level live-name operation for infrastructure setup;
+repository code should use a Source. `Close`, unlike `Remove`, is terminal and
+does not allow reopening.
+
 ## Examples
 
 ```text
@@ -1093,7 +1156,7 @@ examples/multi_db          multiple named SQL sources
 examples/sqlite_concurrent SQLite concurrency throttling
 examples/config            Config-driven setup spanning SQL and REST sources
 examples/repo_compliance   dbstore-gen generated UserRepository, SQLite + REST, one capability-gated suite
-examples/prometheus        SetObserver wired to Prometheus metrics
+examples/prometheus        construction-time Observer wired to Prometheus metrics
 ```
 
 ## Layout

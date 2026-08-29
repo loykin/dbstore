@@ -43,11 +43,17 @@ direction: `application repository -> generated wrapper -> Source -> Handle
 -> RepoBackend`. Each boundary depends only on the layer immediately below it:
 
 - `DriverBuilder[T]` opens one concrete `T` from a `SourceConfig`.
+- Driver registration is construction-only. The first valid source
+  `Register` attempt is the single freeze point, even if driver Open fails;
+  later `RegisterDriver` calls panic as setup misuse instead of racing live
+  Opens. Do not add a second freeze call to `Adapter.Open` or `Configure`.
 - `Directory[T]` (`internal/store/directory.go`) owns the name -> client
   map, lifecycle (`Register`/`Remove`/`RemoveAll`), and a per-source
   concurrency throttle.
-- `Executor[T]` (`executor.go`) is the scoped, throttled entry point
-  repository code calls through `Run`.
+- `Executor[T]` (`executor.go`) is the low-level, throttled entry point for
+  operating on the current entry behind a name. Repository code reaches it
+  only through an identity-bound `Source`; direct `Executor.Run` is reserved
+  for explicit infrastructure and dynamic-management work.
 - `Adapter[T]` (`adapter.go`) is the public-facing wrapper combining a
   `DriverRegistry` + `Directory` + `Executor`. `AdapterContract[T]` is a
   compile-time-only interface (`var _ AdapterContract[T] = (*Adapter)(nil)`)
@@ -56,10 +62,12 @@ direction: `application repository -> generated wrapper -> Source -> Handle
   one to `Adapter[T]`, and update all four adapter packages together.
   `Source(name)` is deliberately *not* on this interface — see
   `adapters/sqlx/adapter.go`'s doc comment for why.
-- `Source[T]` is the low-level `Runner[T]` core repositories can use
-  directly; `sqlxadapter.Source`/`restadapter.Source` wrap it to hand out an
-  `Handle` instead of the raw client (see "Adding a domain repository"
-  below). **Never embed a `Source` or `Handle` in a repository struct** —
+- `Source[T]` is the identity-bound `Runner[T]` core repositories can use
+  directly. It captures the exact entry present at construction; removal or
+  same-name replacement invalidates it rather than silently rebinding.
+  `sqlxadapter.Source`/`restadapter.Source` wrap it to hand out a `Handle`
+  instead of the raw client (see "Adding a domain repository" below).
+  **Never embed a `Source` or `Handle` in a repository struct** —
   always a named field. Embedding promotes `Run` onto the repository type
   itself, leaking infra access past the domain interface; `examples/`
   previously had exactly this bug.
@@ -91,6 +99,10 @@ The workflow is:
        adapter: github.com/loykin/dbstore/adapters/rest
    ```
 
+   Do not add method names or method-level behavior to the generator config.
+   The Go interface is the single source of repository shape, and generated
+   methods all follow the same runtime error rules.
+
    ```go
    //go:generate go tool dbstore-gen -config user_repo.gen.yaml
    ```
@@ -110,10 +122,11 @@ The workflow is:
 2. Fill in each backend's `XxxBackend` method bodies using that backend's
    `Handle` type (`sqlxadapter.Handle`, `restadapter.Handle`, ...) —
    never the raw client. `Handle.Get` already translates a driver
-   "not found" (`sql.ErrNoRows`, HTTP 404, ...) into `dbstore.ErrNotFound`;
-   `dbstore.Call` translates that into `(nil, nil)` for the caller, so
-   repository backend code should not do its own not-found translation beyond
-   returning what `Handle.Get` gives it.
+	"not found" (`sql.ErrNoRows`, HTTP 404, ...) into `dbstore.ErrNotFound`.
+	Generated repositories always return it with the result type's zero value
+	through `dbstore.Call`; method behavior is never duplicated in generator
+	YAML. Repository backend code should return what `Handle.Get` gives it
+	rather than applying policy itself.
 3. Document a multi-op method's atomicity by which `Handle` method it uses
    — `WithTx` (SQL, atomic) vs. a plain loop (no transaction concept,
    best-effort sequential). Reflect this in the corresponding
@@ -139,28 +152,28 @@ The workflow is:
 ### Directory's two-lock design
 
 Read this before touching lifecycle or Observer code — it has been the
-source of several subtle concurrency bugs, each now covered by a dedicated
-regression test in `observer_test.go`. `Directory[T]` uses two locks, not
-one: `mu` guards the entries map, and `observerMu` (an `observerLock`, not
-a plain `sync.Mutex` — see `observer_lock.go`) orders Observer callback
-delivery to match mutation order. `beginObserverHandoff()` is the single
-choke point all four mutating methods (`Register`/`Remove`/`RemoveAll`/
-`SetObserver`) go through to hand off from `mu` to `observerMu` without
-leaking either lock if the handoff panics. `observerCallbackGuard` rejects
-same-goroutine reentrancy before lifecycle state changes — including from
-`ObserveAcquire`/`ObserveComplete`, which do not hold `observerMu` — while
-`observerLock` retains a defensive lock-level check. See the doc comments on
-the `observerMu` field, `beginObserverHandoff`, and `observer_lock.go` for
-the reasoning before changing any of this.
+source of subtle concurrency bugs and is covered by `observer_test.go`.
+`mu` guards the entries map; the plain `observerMu` orders lifecycle callback
+delivery to match mutation order. `beginLifecycleNotification()` reserves that order
+while `mu` is still held, then releases `mu` before calling external code.
+Observer is immutable after construction. Observer callbacks must never call
+Register/Remove/RemoveAll synchronously on the same Directory.
+
+Do not replace this contract with a process-wide/Directory-wide atomic
+"callback active" guard: it cannot distinguish same-goroutine reentry from a
+legitimate concurrent lifecycle call and therefore creates false panics.
+Context marking also cannot enforce this contract while lifecycle methods do
+not accept context. Exact fail-fast detection would require unsupported
+goroutine identity or a materially different asynchronous Observer contract.
 
 ### Adapters vs. Observer
 
 `adapters/{sqlx,rest,opensearch,elasticsearch}` are backend adapters — each
 wraps `Adapter[T]` for one concrete client type and provides
 `RegisterDefaultDrivers`. `adapters/prometheus` is a different kind of
-thing: an `Observer` implementation, not a backend adapter. It plugs into
-any `Directory`/`Executor` via `SetObserver` and has no adapter-contract
-obligations.
+thing: an `Observer` implementation, not a backend adapter. Prefer passing it
+through `WithObserver` when constructing an adapter. Runtime replacement is
+not supported.
 
 ### dbstoretest is intentionally a separate package
 
@@ -200,6 +213,10 @@ semantics before changing `Directory`, `Adapter.Configure`, or `Observer`:
   new `Run` starts against a removed name.
 - Concurrent opens of the same name: exactly one wins, the loser's client
   is closed rather than leaked.
-- `Configure` is sequential-publish-with-rollback, not atomic.
+- `Close` is terminal and waits for Runs and already-started Opens to finish
+  cleanup; an Open racing with Close must not publish afterward.
+- `Configure` is sequential-publish-with-rollback, not atomic. Rollback must
+  remove only the exact entries opened by that call, never a same-name
+  replacement registered concurrently.
 - A panicking `Observer` method is recovered and must never fail the
   `Run`/`Register`/etc. call that triggered it.

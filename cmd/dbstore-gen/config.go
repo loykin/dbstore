@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,7 +11,9 @@ import (
 
 // Config is the explicit, checked-in declaration of what dbstore-gen
 // mirrors for one domain interface: which interface, which file, and which
-// backends map to which adapter package. All three are data here, never
+// backends map to which adapter package. Repository methods and their behavior
+// deliberately do not appear here; the Go interface and dbstore's uniform
+// runtime rules are their single sources of truth. All config fields are data, never
 // inferred from file content or guessed by name shape — a prior
 // name-suffix heuristic for -interface was removed because it could pick
 // the wrong interface silently instead of failing loudly, which is worse
@@ -40,7 +43,9 @@ func loadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 
