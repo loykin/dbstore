@@ -12,11 +12,16 @@ When one repository contract needs more than one backend, dbstore also
 generates the delegation boilerplate so one behavioral test suite verifies
 every implementation instead of two independently-drifting ones. **In
 numbers:** a single-backend repository needs none of this generator
-machinery — 4 lines of setup, see "Single-Backend Quick Start" below. A
-4-method repository shared across SQLite and REST
-(`examples/repo_compliance`) is ~285 lines total, and about 155 of those are
-tests you'd want regardless of dbstore; the rest is a 10-line YAML config
-and two ~50-line backend bodies. The full breakdown is under "Why".
+machinery, but it isn't free either — "Single-Backend Quick Start" below is
+~80 lines end to end, roughly double a bare `database/sql` script doing the
+same thing, because it buys you the safe-open/no-double-registration/
+throttled-shutdown guarantees up front. If you have exactly one connection
+and don't expect to add more, that premium may not be worth paying yet —
+see "Why" for where it starts paying off. A 4-method repository shared
+across SQLite and REST (`examples/repo_compliance`) is ~285 lines total,
+and about 155 of those are tests you'd want regardless of dbstore; the
+rest is a 10-line YAML config and two ~50-line backend bodies. The full
+breakdown is under "Why".
 
 See "Guarantees" below for exactly what dbstore's lifecycle handling
 promises.
